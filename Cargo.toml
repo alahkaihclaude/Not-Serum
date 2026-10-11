@@ -1,0 +1,20 @@
+[workspace]
+members = ["xtask"]
+
+[package]
+name = "morphwave"
+version = "0.1.0"
+edition = "2021"
+license = "LicenseRef-Proprietary"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+# default-features = false drops the `vst3` feature, which pulls in GPLv3 vst3-sys (see README "Licensing").
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683", default-features = false, features = ["assert_process_allocs"] }
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
