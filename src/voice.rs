@@ -144,6 +144,8 @@ struct Voice {
 
 pub struct Synth {
     tables: Arc<Vec<Wavetable>>,
+    /// Per-osc user tables, used when an osc's table index is past the built-ins.
+    custom: [Option<Arc<Wavetable>>; 2],
     voices: [Voice; MAX_VOICES],
     sample_rate: f32,
     rng: Rng,
@@ -161,6 +163,7 @@ impl Synth {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             tables: Arc::new(wavetable::builtin()),
+            custom: [None, None],
             voices: [Voice::default(); MAX_VOICES],
             sample_rate,
             rng: Rng::new(0x1234_5678),
@@ -175,6 +178,12 @@ impl Synth {
     /// Shared with the GUI for drawing.
     pub fn tables(&self) -> Arc<Vec<Wavetable>> {
         self.tables.clone()
+    }
+
+    /// Swaps in a user table for osc `osc`. Returns the old one: the caller must free it off the audio thread.
+    #[must_use]
+    pub fn set_custom_table(&mut self, osc: usize, table: Option<Arc<Wavetable>>) -> Option<Arc<Wavetable>> {
+        std::mem::replace(&mut self.custom[osc], table)
     }
 
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
@@ -302,6 +311,14 @@ impl Synth {
     pub fn render(&mut self, patch: &Patch, left: &mut [f32], right: &mut [f32]) {
         left.fill(0.0);
         right.fill(0.0);
+        // Arc clones (refcount bumps, no allocation) so the borrows don't pin `self`
+        let tables = self.tables.clone();
+        let custom = self.custom.clone();
+        // an index past the built-ins means "Custom"; with nothing loaded it falls back to Basic Shapes
+        let osc_tables: [&Wavetable; 2] = std::array::from_fn(|i| match tables.get(patch.osc[i].table) {
+            Some(t) => t,
+            None => custom[i].as_deref().unwrap_or(&tables[0]),
+        });
         for (l, r) in left.chunks_mut(BLOCK).zip(right.chunks_mut(BLOCK)) {
             for i in 0..MAX_VOICES {
                 let v = &self.voices[i];
@@ -310,7 +327,7 @@ impl Synth {
                 }
                 if self.voices[i].active {
                     let bend = self.bend * patch.bend_range;
-                    self.voices[i].render(patch, &self.tables, self.sample_rate, bend, &mut self.rng, l, r);
+                    self.voices[i].render(patch, osc_tables, &tables[0], self.sample_rate, bend, &mut self.rng, l, r);
                 }
             }
             let gain = patch.master;
@@ -327,7 +344,8 @@ impl Voice {
     fn render(
         &mut self,
         p: &Patch,
-        tables: &[Wavetable],
+        osc_tables: [&Wavetable; 2],
+        basic: &Wavetable,
         sr: f32,
         bend: f32,
         rng: &mut Rng,
@@ -351,7 +369,7 @@ impl Voice {
         let osc_setup: [Option<(&Wavetable, f32, Unison)>; 2] = std::array::from_fn(|i| {
             let o = &p.osc[i];
             (o.level > 0.0).then(|| {
-                let table = &tables[o.table.min(tables.len() - 1)];
+                let table = osc_tables[i];
                 let frame_pos = o.position.clamp(0.0, 1.0) * (table.frames() - 1) as f32;
                 let freq = midi_to_hz(pitch + (o.octave * 12 + o.semi) as f32 + o.fine / 100.0);
                 let settings = UnisonSettings {
@@ -366,7 +384,6 @@ impl Voice {
             })
         });
 
-        let basic = &tables[0];
         let sub_inc = (midi_to_hz(pitch + (p.sub_octave * 12) as f32) / sr).min(0.49);
         let sub_mip = mip_for(sub_inc);
         let sub_frame = p.sub_shape.min(basic.frames() - 1) as f32;

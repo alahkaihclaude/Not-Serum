@@ -5,20 +5,29 @@ pub mod dsp;
 mod editor;
 pub mod params;
 pub mod voice;
+pub mod wavetable_import;
 
 use params::MorphwaveParams;
 use voice::{Patch, Synth, BLOCK};
+use wavetable_import::TableSlot;
 
 pub struct Morphwave {
     params: Arc<MorphwaveParams>,
     synth: Synth,
     /// Last block's settings, used when a note event arrives between blocks.
     patch: Patch,
+    /// Custom wavetable hand-off for Osc A and Osc B (loader thread / GUI / audio thread).
+    slots: Arc<[TableSlot; 2]>,
 }
 
 impl Default for Morphwave {
     fn default() -> Self {
-        Self { params: Arc::new(MorphwaveParams::default()), synth: Synth::new(44100.0), patch: Patch::default() }
+        Self {
+            params: Arc::new(MorphwaveParams::default()),
+            synth: Synth::new(44100.0),
+            patch: Patch::default(),
+            slots: Arc::new(Default::default()),
+        }
     }
 }
 
@@ -47,7 +56,7 @@ impl Plugin for Morphwave {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create(self.params.clone(), self.synth.tables())
+        editor::create(self.params.clone(), self.synth.tables(), self.slots.clone())
     }
 
     fn initialize(
@@ -57,6 +66,11 @@ impl Plugin for Morphwave {
         _context: &mut impl InitContext<Self>,
     ) -> bool {
         self.synth.set_sample_rate(buffer_config.sample_rate);
+        // Runs after a state load too, so this is where saved custom wavetables come back.
+        for (i, osc) in [&self.params.osc_a, &self.params.osc_b].into_iter().enumerate() {
+            let table = self.slots[i].restore(&osc.custom);
+            drop(self.synth.set_custom_table(i, table));
+        }
         true
     }
 
@@ -70,6 +84,14 @@ impl Plugin for Morphwave {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        for (i, slot) in self.slots.iter().enumerate() {
+            if let Some(table) = slot.take_new() {
+                if let Some(old) = self.synth.set_custom_table(i, Some(table)) {
+                    slot.retire(old);
+                }
+            }
+        }
+
         let num_samples = buffer.samples();
         let (left, right) = buffer.as_slice().split_at_mut(1);
         let (left, right) = (&mut *left[0], &mut *right[0]);

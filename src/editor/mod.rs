@@ -4,10 +4,11 @@
 mod widgets;
 
 use crate::dsp::wavetable::Wavetable;
-use crate::params::{EnvParams, MorphwaveParams, OscParams};
+use crate::params::{EnvParams, MorphwaveParams, OscParams, Table};
+use crate::wavetable_import::TableSlot;
 use crate::voice::EnvPatch;
 use nih_plug::prelude::{Editor, Enum, ParamSetter};
-use nih_plug_egui::egui::{vec2, Align2, Sense, Ui, Vec2};
+use nih_plug_egui::egui::{vec2, Align2, Color32, Sense, Stroke, StrokeKind, Ui, Vec2};
 use nih_plug_egui::resizable_window::ResizableWindow;
 use nih_plug_egui::{create_egui_editor, EguiState};
 use std::sync::Arc;
@@ -20,7 +21,11 @@ pub fn default_state() -> Arc<EguiState> {
     EguiState::from_size(W as u32, H as u32)
 }
 
-pub fn create(params: Arc<MorphwaveParams>, tables: Arc<Vec<Wavetable>>) -> Option<Box<dyn Editor>> {
+pub fn create(
+    params: Arc<MorphwaveParams>,
+    tables: Arc<Vec<Wavetable>>,
+    slots: Arc<[TableSlot; 2]>,
+) -> Option<Box<dyn Editor>> {
     let state = params.editor_state.clone();
     create_egui_editor(params.editor_state.clone(), (), |_, _| {}, move |ctx, setter, _| {
         ResizableWindow::new("morphwave").min_size(Vec2::new(W * 0.75, H * 0.75)).show(ctx, &state, |ui| {
@@ -28,7 +33,7 @@ pub fn create(params: Arc<MorphwaveParams>, tables: Arc<Vec<Wavetable>>) -> Opti
             ui.painter().rect_filled(avail, 0.0, BG);
             let s = (avail.width() / W).min(avail.height() / H).clamp(0.75, 2.0);
             let l = Layout { origin: avail.center() - vec2(W, H) * s / 2.0, s };
-            draw(ui, &l, setter, &params, &tables);
+            draw(ui, &l, setter, &params, &tables, &slots);
             scale_presets(ui, &l, &state);
         });
     })
@@ -48,7 +53,14 @@ fn scale_presets(ui: &mut Ui, l: &Layout, state: &EguiState) {
     }
 }
 
-fn draw(ui: &mut Ui, l: &Layout, setter: &ParamSetter, p: &MorphwaveParams, tables: &[Wavetable]) {
+fn draw(
+    ui: &mut Ui,
+    l: &Layout,
+    setter: &ParamSetter,
+    p: &Arc<MorphwaveParams>,
+    tables: &[Wavetable],
+    slots: &Arc<[TableSlot; 2]>,
+) {
     let painter = ui.painter();
     painter.text(l.r(16.0, 22.0, 0.0, 0.0).min, Align2::LEFT_CENTER, "MORPHWAVE", l.font(20.0), ACCENT);
     painter.text(l.r(150.0, 24.0, 0.0, 0.0).min, Align2::LEFT_CENTER, "wavetable synthesizer", l.font(11.0), TEXT_DIM);
@@ -60,8 +72,8 @@ fn draw(ui: &mut Ui, l: &Layout, setter: &ParamSetter, p: &MorphwaveParams, tabl
         TEXT_DIM,
     );
 
-    osc(ui, l, setter, &p.osc_a, "OSC A", 10.0, tables);
-    osc(ui, l, setter, &p.osc_b, "OSC B", 410.0, tables);
+    osc(ui, l, setter, p, 0, tables, slots);
+    osc(ui, l, setter, p, 1, tables, slots);
 
     // Sub
     let (x, y) = (810.0, 50.0);
@@ -111,13 +123,87 @@ fn draw(ui: &mut Ui, l: &Layout, setter: &ParamSetter, p: &MorphwaveParams, tabl
     knob(ui, l, setter, &p.master, l.r(x + 70.0, y + 205.0, 0.0, 0.0).min, "Volume");
 }
 
-fn osc(ui: &mut Ui, l: &Layout, setter: &ParamSetter, o: &OscParams, title: &str, x: f32, tables: &[Wavetable]) {
-    let y = 50.0;
-    panel(ui, l, l.r(x, y, 390.0, 310.0), title);
+fn osc_params(p: &MorphwaveParams, i: usize) -> &OscParams {
+    if i == 0 {
+        &p.osc_a
+    } else {
+        &p.osc_b
+    }
+}
+
+/// Loads a WAV on a background thread (file dialog if `path` is None) so the GUI never blocks.
+fn spawn_load(p: &Arc<MorphwaveParams>, slots: &Arc<[TableSlot; 2]>, i: usize, path: Option<std::path::PathBuf>) {
+    let (p, slots) = (p.clone(), slots.clone());
+    std::thread::spawn(move || {
+        let path = path.or_else(|| rfd::FileDialog::new().add_filter("WAV wavetable", &["wav", "WAV"]).pick_file());
+        if let Some(path) = path {
+            slots[i].load_file(&path, &osc_params(&p, i).custom);
+        }
+    });
+}
+
+fn osc(
+    ui: &mut Ui,
+    l: &Layout,
+    setter: &ParamSetter,
+    p: &Arc<MorphwaveParams>,
+    i: usize,
+    tables: &[Wavetable],
+    slots: &Arc<[TableSlot; 2]>,
+) {
+    let (o, slot) = (osc_params(p, i), &slots[i]);
+    let (x, y) = (10.0 + 400.0 * i as f32, 50.0);
+    let panel_rect = l.r(x, y, 390.0, 310.0);
+    panel(ui, l, panel_rect, ["OSC A", "OSC B"][i]);
     stepper(ui, l, setter, &o.table, l.r(x + 70.0, y + 6.0, 180.0, 20.0));
     toggle(ui, l, setter, &o.to_filter, l.r(x + 320.0, y + 7.0, 60.0, 18.0), "FILTER");
-    let table = &tables[o.table.value().to_index().min(tables.len() - 1)];
-    wavetable_view(ui, l, l.r(x + 10.0, y + 32.0, 370.0, 130.0), table, o.position.value());
+
+    // LOAD button + drag-and-drop of a WAV onto the panel
+    let load = l.r(x + 258.0, y + 7.0, 54.0, 18.0);
+    let resp = ui.interact(load, ui.id().with(("load", i)), Sense::click());
+    if resp.clicked() {
+        spawn_load(p, slots, i, None);
+    }
+    ui.painter().rect_stroke(load, 9.0 * l.s, Stroke::new(1.0_f32, if resp.hovered() { ACCENT } else { PANEL_EDGE }), StrokeKind::Inside);
+    ui.painter().text(load.center(), Align2::CENTER_CENTER, "LOAD", l.font(10.0), if resp.hovered() { ACCENT } else { TEXT_DIM });
+    let (pointer, hovering, dropped) =
+        ui.ctx().input(|inp| (inp.pointer.hover_pos(), !inp.raw.hovered_files.is_empty(), inp.raw.dropped_files.clone()));
+    let over = pointer.is_some_and(|pos| panel_rect.contains(pos));
+    if over {
+        if let Some(path) = dropped.into_iter().find_map(|f| f.path) {
+            spawn_load(p, slots, i, Some(path));
+        }
+    }
+
+    // after a successful load, point the Table parameter at it (through the host, so it's undoable)
+    if slot.select_custom.swap(false, std::sync::atomic::Ordering::AcqRel) {
+        setter.begin_set_parameter(&o.table);
+        setter.set_parameter(&o.table, Table::Custom);
+        setter.end_set_parameter(&o.table);
+    }
+
+    let view = l.r(x + 10.0, y + 32.0, 370.0, 130.0);
+    let current = slot.current.lock().unwrap().as_ref().map(|(name, t, _)| (name.clone(), t.clone()));
+    let custom_selected = o.table.value() == Table::Custom;
+    match (&current, custom_selected) {
+        (Some((name, table)), true) => {
+            wavetable_view(ui, l, view, table, o.position.value());
+            ui.painter().text(view.min + vec2(6.0, 4.0) * l.s, Align2::LEFT_TOP, name, l.font(10.0), TEXT_DIM);
+        }
+        _ => {
+            let table = &tables[o.table.value().to_index().min(tables.len() - 1)];
+            wavetable_view(ui, l, view, table, o.position.value());
+            if custom_selected {
+                ui.painter().text(view.center(), Align2::CENTER_CENTER, "No custom table: click LOAD or drop a WAV here", l.font(11.0), TEXT);
+            }
+        }
+    }
+    if let Some(err) = slot.error.lock().unwrap().as_ref() {
+        ui.painter().text(view.left_bottom() + vec2(6.0, -4.0) * l.s, Align2::LEFT_BOTTOM, format!("Load failed: {err}"), l.font(10.0), Color32::from_rgb(0xff, 0x6b, 0x5b));
+    }
+    if hovering && over {
+        ui.painter().rect_stroke(panel_rect, 6.0 * l.s, Stroke::new(2.0 * l.s, ACCENT), StrokeKind::Inside);
+    }
 
     let (row1, row2) = (y + 195.0, y + 268.0);
     let at = |i: usize, row: f32| l.r(x + 38.0 + i as f32 * 63.0, row, 0.0, 0.0).min;

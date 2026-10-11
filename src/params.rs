@@ -2,6 +2,7 @@
 
 use crate::dsp::filter::FilterMode;
 use crate::voice::{EnvPatch, OscPatch, Patch, VoiceMode};
+use crate::wavetable_import::StoredTable;
 use nih_plug::prelude::*;
 use std::sync::Arc;
 
@@ -19,6 +20,9 @@ pub enum Table {
     #[id = "harmonics"]
     #[name = "Harmonic Build"]
     Harmonics,
+    /// A table loaded from a WAV file. Keep it last: the indices before it map onto `wavetable::builtin()`.
+    #[id = "custom"]
+    Custom,
 }
 
 #[derive(Enum, PartialEq, Clone, Copy)]
@@ -117,6 +121,9 @@ pub struct OscParams {
     pub random_phase: FloatParam,
     #[id = "filter"]
     pub to_filter: BoolParam,
+    /// The loaded WAV wavetable, stored in the project so it opens on other machines.
+    #[persist = "wavetable"]
+    pub custom: std::sync::Mutex<Option<StoredTable>>,
 }
 
 impl OscParams {
@@ -141,6 +148,7 @@ impl OscParams {
             phase: percent(format!("{name} Phase"), d.phase, 0.0),
             random_phase: percent(format!("{name} Random Phase"), d.random_phase, 0.0),
             to_filter: BoolParam::new(format!("{name} To Filter"), d.to_filter),
+            custom: std::sync::Mutex::new(None),
         }
     }
 

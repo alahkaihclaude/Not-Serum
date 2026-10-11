@@ -2,13 +2,21 @@
 
 A wavetable synthesizer plugin written in Rust with [nih-plug](https://github.com/robbert-vdh/nih-plug), for FL Studio on Windows x64.
 
-Status: **Phase 2, custom GUI.**
+Status: **Phase 3, wavetable import.**
 
 ## Using the GUI
 
 - **Knobs:** drag up or down to change the value. Hold **Shift** for fine adjustment. **Double-click** resets to the default. The value shows while you hover or drag.
 - **◀ ▶ selectors** step through wavetables, filter types, sub shapes and voice modes. **FILTER / ON** pills are switches.
 - **Size:** click **75% to 200%** at the top right, or drag the bottom-right corner.
+
+## Custom wavetables
+
+- Click **LOAD** on Osc A or Osc B and pick a `.wav`, or **drag a WAV file onto the oscillator panel**. The osc switches its Table to **Custom**.
+- Any WAV works: mono or stereo (stereo is mixed to mono), 16/24/32-bit integer or 32-bit float.
+- **Frame size** comes from the file's `clm ` chunk if it has one (the usual wavetable-WAV convention, e.g. `<!>2048`). Otherwise it's 2048. A file whose length isn't a whole number of frames is treated as one single-cycle wave. Up to 256 frames are used.
+- The wavetable itself, not just its file path, is **saved in your FL Studio project**, so the project opens on another computer without the WAV. It's stored compressed at 16-bit, roughly 0.1 to 1 MB per osc.
+- Selecting a built-in table keeps your custom table loaded. Step back to **Custom** to use it again.
 - Every control goes through the host's parameter system, so FL Studio automation, undo and "link to controller" all work.
 
 ## What's in it
@@ -47,19 +55,22 @@ The plugin may be sold closed-source later, so every dependency that ships in th
 | egui's built-in fonts (`epaint_default_fonts`) | OFL-1.1, Ubuntu Font Licence 1.0 | Yes. Approved 2026-10-10. Font license texts must ship with the product (see `THIRD_PARTY.md`) |
 | `clipboard-win`, `error-code` (egui clipboard) | BSL-1.0 | Yes. Approved 2026-10-10 |
 | `realfft` / `rustfft` | MIT / Apache-2.0 | Yes |
-| `hound` (offline renderer only, not shipped yet) | Apache-2.0 | Yes |
+| `hound` (WAV parsing) | Apache-2.0 | Yes |
+| `rfd` (file dialog), `miniz_oxide`, `base64`, `crossbeam-queue`, `serde` | MIT / Apache-2.0 (miniz_oxide also Zlib) | Yes |
+| egui-baseview (copied into `vendor/` with a drag-and-drop fix) | MIT | Yes |
 
 **Result: CLAP only for now.** nih-plug is built with `default-features = false`, which turns off the `vst3` feature, so no GPL code goes into the binary. FL Studio loads CLAP plugins.
 
 **Open item before any sale: VST3.** Steinberg moved the VST3 SDK to the MIT license with VST 3.8 (October 2025), but nih-plug still uses the GPLv3 `vst3-sys` bindings. Options: wait for nih-plug to move to permissive bindings (for example the `vst3` crate from coupler-rs), or patch that in ourselves.
 
-To audit the whole shipped dependency tree again, run `cargo metadata` and check each crate's `license` field. This was last done in Phase 2: every other crate is MIT, Apache-2.0, ISC, BSD or Zlib. `rfd` (Phase 3) has not been checked yet.
+To audit the whole shipped dependency tree again, run `cargo metadata` and check each crate's `license` field. This was last done in Phase 3 (144 shipped crates): every crate not listed above is MIT, Apache-2.0, ISC, BSD or Zlib.
 
 ## Patched upstream code
 
-`vendor/` holds local copies of nih-plug (core) and nih_plug_egui with small fixes. Each copy's `PATCHES.md` explains them.
+`vendor/` holds local copies of nih-plug (core), nih_plug_egui and egui-baseview with small fixes. Each copy's `PATCHES.md` explains them.
 - **State loading** ([robbert-vdh/nih-plug#275](https://github.com/robbert-vdh/nih-plug/issues/275), [#279](https://github.com/robbert-vdh/nih-plug/issues/279)): corrupt state no longer aborts the host, and the host is told when parameter values change.
 - **GUI resize:** the window can now be resized from inside the plugin.
+- **Drag-and-drop** (egui-baseview): files dropped on the window now reach the GUI.
 
 clap-validator now runs every test with nothing skipped. Drop the copies once upstream has the fixes.
 
