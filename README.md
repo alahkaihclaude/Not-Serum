@@ -2,7 +2,18 @@
 
 A wavetable synthesizer plugin written in Rust with [nih-plug](https://github.com/robbert-vdh/nih-plug), for FL Studio on Windows x64.
 
-Status: **Phase 0**. The plugin plays a single sine voice so you can check that the install works.
+Status: **Phase 1, core synth.** There's no custom GUI yet. FL Studio shows its generic knob panel instead (click the plugin's wrench icon, or open the plugin window).
+
+## What's in it
+
+- **Osc A / Osc B.** Wavetable oscillators with 4 built-in tables (Basic Shapes, which morphs sine → triangle → saw → square, plus PWM Sweep, Formant Sweep and Harmonic Build). Each has position, level, pan, octave/semi/fine, unison 1–16 with detune, blend and width, start phase and random phase. Osc B starts at level 0.
+- **Sub** (sine/triangle/saw/square, octave) and **Noise**.
+- **Filter.** LP/HP/BP at 12 or 24 dB, with cutoff, resonance, drive and key tracking. "Env 2 > Cutoff" sets how far Env 2 moves the cutoff. Each source has a "To Filter" switch; when it's off, that source skips the filter.
+- **Env 1** controls volume. **Env 2** controls the filter.
+- **Voices.** 16-voice poly with click-free voice stealing, plus Mono and Legato modes. Glide and pitch-bend range.
+- **Master** volume, followed by an output soft-clip that never goes above 0 dBFS.
+
+Every build also uploads `Morphwave-demo-renders`: WAV files of the demo patches (a chord, a filter sweep and a scale up to C8). You can listen to those without FL Studio.
 
 ## Install
 
@@ -40,6 +51,7 @@ These will be checked when they are added in later phases: egui and nih_plug_egu
 ```
 cargo test
 cargo xtask bundle morphwave --release
+cargo run --release --example render -- supersaw out.wav   # presets: init supersaw pluck bass pad; or `bench`
 ```
 
 CI (`.github/workflows/build.yml`) runs on `windows-latest`. It runs the tests, bundles the plugin, runs [clap-validator](https://github.com/free-audio/clap-validator), and uploads `target/bundled/*` as the `Morphwave-windows` artifact.

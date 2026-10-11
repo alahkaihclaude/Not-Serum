@@ -1,46 +1,54 @@
 //! Plain-Rust DSP: no nih-plug types here, so `cargo test` runs without a host.
 
-use std::f32::consts::TAU;
+pub mod env;
+pub mod filter;
+pub mod osc;
+pub mod wavetable;
 
-/// Phase 0 "hello" voice: one monophonic sine with a short linear fade to avoid clicks.
-/// shortcut: last-note mono only, replaced by the wavetable voice engine in Phase 1.
-pub struct SineVoice {
-    phase: f32,
-    freq: f32,
-    gain: f32,
-    target: f32,
-    note: Option<u8>,
+pub fn midi_to_hz(note: f32) -> f32 {
+    440.0 * ((note - 69.0) / 12.0).exp2()
 }
 
-/// Fade time in seconds for note on/off.
-const FADE_S: f32 = 0.005;
+/// Rational tanh approximation, accurate to ~2% and exact at 0 and ±inf.
+#[inline]
+pub fn fast_tanh(x: f32) -> f32 {
+    let x = x.clamp(-3.0, 3.0);
+    let x2 = x * x;
+    x * (27.0 + x2) / (27.0 + 9.0 * x2)
+}
 
-impl Default for SineVoice {
-    fn default() -> Self {
-        Self { phase: 0.0, freq: 440.0, gain: 0.0, target: 0.0, note: None }
+/// Output safety: transparent below 0.8, then rounds off so the output never exceeds 1.0.
+#[inline]
+pub fn soft_clip(x: f32) -> f32 {
+    const KNEE: f32 = 0.8;
+    let a = x.abs();
+    if a <= KNEE {
+        x
+    } else {
+        (KNEE + (1.0 - KNEE) * fast_tanh((a - KNEE) / (1.0 - KNEE))).copysign(x)
     }
 }
 
-impl SineVoice {
-    pub fn note_on(&mut self, note: u8, velocity: f32) {
-        self.note = Some(note);
-        self.freq = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
-        self.target = velocity;
+/// xorshift32: allocation-free noise and random phases for the audio thread.
+pub struct Rng(u32);
+
+impl Rng {
+    pub fn new(seed: u32) -> Self {
+        Self(seed.max(1))
     }
 
-    pub fn note_off(&mut self, note: u8) {
-        if self.note == Some(note) {
-            self.note = None;
-            self.target = 0.0;
-        }
+    /// Uniform in [0, 1).
+    #[inline]
+    pub fn next_f32(&mut self) -> f32 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 17;
+        self.0 ^= self.0 << 5;
+        (self.0 >> 8) as f32 / (1u32 << 24) as f32
     }
 
-    pub fn next(&mut self, sample_rate: f32) -> f32 {
-        let step = 1.0 / (FADE_S * sample_rate);
-        self.gain += (self.target - self.gain).clamp(-step, step);
-        let out = (self.phase * TAU).sin() * self.gain;
-        self.phase = (self.phase + self.freq / sample_rate).fract();
-        out
+    #[inline]
+    pub fn bipolar(&mut self) -> f32 {
+        self.next_f32() * 2.0 - 1.0
     }
 }
 
@@ -49,15 +57,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plays_then_goes_silent() {
-        let mut v = SineVoice::default();
-        v.note_on(69, 1.0);
-        let peak = (0..4800).map(|_| v.next(48000.0).abs()).fold(0.0, f32::max);
-        assert!(peak > 0.9 && peak <= 1.0, "peak {peak}");
-        v.note_off(69);
-        for _ in 0..4800 {
-            v.next(48000.0);
+    fn soft_clip_is_bounded_and_transparent_below_knee() {
+        assert_eq!(soft_clip(0.5), 0.5);
+        for x in [1.0f32, 2.0, 10.0, 1e9, -1e9] {
+            assert!(soft_clip(x).abs() <= 1.0);
         }
-        assert_eq!(v.next(48000.0), 0.0);
     }
 }

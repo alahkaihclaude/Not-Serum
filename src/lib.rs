@@ -2,47 +2,22 @@ use nih_plug::prelude::*;
 use std::sync::Arc;
 
 pub mod dsp;
+pub mod params;
+pub mod voice;
+
+use params::MorphwaveParams;
+use voice::{Patch, Synth, BLOCK};
 
 pub struct Morphwave {
     params: Arc<MorphwaveParams>,
-    sample_rate: f32,
-    voice: dsp::SineVoice,
-}
-
-#[derive(Params)]
-struct MorphwaveParams {
-    // Parameter IDs are permanent: never rename or remove one once shipped.
-    #[id = "master"]
-    master: FloatParam,
-}
-
-impl Default for MorphwaveParams {
-    fn default() -> Self {
-        Self {
-            master: FloatParam::new(
-                "Master",
-                util::db_to_gain(-12.0),
-                FloatRange::Skewed {
-                    min: util::db_to_gain(-60.0),
-                    max: util::db_to_gain(6.0),
-                    factor: FloatRange::gain_skew_factor(-60.0, 6.0),
-                },
-            )
-            .with_smoother(SmoothingStyle::Logarithmic(50.0))
-            .with_unit(" dB")
-            .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
-            .with_string_to_value(formatters::s2v_f32_gain_to_db()),
-        }
-    }
+    synth: Synth,
+    /// Last block's settings, used when a note event arrives between blocks.
+    patch: Patch,
 }
 
 impl Default for Morphwave {
     fn default() -> Self {
-        Self {
-            params: Arc::new(MorphwaveParams::default()),
-            sample_rate: 44100.0,
-            voice: dsp::SineVoice::default(),
-        }
+        Self { params: Arc::new(MorphwaveParams::default()), synth: Synth::new(44100.0), patch: Patch::default() }
     }
 }
 
@@ -59,7 +34,8 @@ impl Plugin for Morphwave {
         ..AudioIOLayout::const_default()
     }];
 
-    const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
+    // MidiCCs is needed for pitch bend.
+    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
     type SysExMessage = ();
@@ -75,12 +51,12 @@ impl Plugin for Morphwave {
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
-        self.sample_rate = buffer_config.sample_rate;
+        self.synth.set_sample_rate(buffer_config.sample_rate);
         true
     }
 
     fn reset(&mut self) {
-        self.voice = dsp::SineVoice::default();
+        self.synth.reset();
     }
 
     fn process(
@@ -89,24 +65,35 @@ impl Plugin for Morphwave {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        let num_samples = buffer.samples();
+        let (left, right) = buffer.as_slice().split_at_mut(1);
+        let (left, right) = (&mut *left[0], &mut *right[0]);
+
         let mut next_event = context.next_event();
-        for (sample_id, channel_samples) in buffer.iter_samples().enumerate() {
+        let mut start = 0;
+        while start < num_samples {
             while let Some(event) = next_event {
-                if event.timing() > sample_id as u32 {
+                if event.timing() as usize > start {
                     break;
                 }
                 match event {
-                    NoteEvent::NoteOn { note, velocity, .. } => self.voice.note_on(note, velocity),
-                    NoteEvent::NoteOff { note, .. } => self.voice.note_off(note),
+                    NoteEvent::NoteOn { note, velocity, .. } => self.synth.note_on(&self.patch, note, velocity),
+                    NoteEvent::NoteOff { note, .. } => self.synth.note_off(&self.patch, note),
+                    NoteEvent::Choke { note, .. } => self.synth.choke(note),
+                    NoteEvent::MidiPitchBend { value, .. } => self.synth.pitch_bend(value * 2.0 - 1.0),
                     _ => (),
                 }
                 next_event = context.next_event();
             }
 
-            let out = self.voice.next(self.sample_rate) * self.params.master.smoothed.next();
-            for sample in channel_samples {
-                *sample = out;
-            }
+            // split blocks at the next event so notes start sample-accurately
+            let end = next_event
+                .map_or(num_samples, |e| e.timing() as usize)
+                .min(num_samples)
+                .min(start + BLOCK);
+            self.patch = self.params.patch((end - start) as u32);
+            self.synth.render(&self.patch, &mut left[start..end], &mut right[start..end]);
+            start = end;
         }
         ProcessStatus::KeepAlive
     }

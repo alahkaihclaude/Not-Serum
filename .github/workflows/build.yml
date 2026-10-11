@@ -31,7 +31,19 @@ jobs:
           & $exe validate --only-failed -x "state-reproducibility" -x "state-invalid-random" target/bundled/Morphwave.clap
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Render demos and benchmark
+        shell: bash
+        run: |
+          mkdir renders
+          for p in init supersaw pluck bass pad; do cargo run -q --release --example render -- $p renders/$p.wav; done
+          cargo run -q --release --example render -- bench
+
       - uses: actions/upload-artifact@v4
         with:
           name: Morphwave-windows
           path: target/bundled/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Morphwave-demo-renders
+          path: renders/*.wav
