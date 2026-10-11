@@ -8,3 +8,4 @@ It is wired in through `[patch]` in the root `Cargo.toml`. All edits are marked 
 2. `src/wrapper/clap/wrapper.rs` `set_state_inner`: also schedule `RescanParamValues` so the host re-reads parameter values after a state load (robbert-vdh/nih-plug#275).
 
 Drop this copy when upstream fixes both.
+3. `src/wrapper/clap/wrapper.rs` input events: the queue was preallocated for 512 events and grew past that, which allocated on the audio thread. clap-validator's `process-varying-block-sizes` sends about 500+ notes in a 16384-sample block, and a debug build aborted there. The queue now holds 4096 events, and `push_bounded` silently drops anything past that instead of growing.

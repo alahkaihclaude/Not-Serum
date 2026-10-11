@@ -549,7 +549,8 @@ impl<P: ClapPlugin> Wrapper<P> {
             ),
             current_buffer_config: AtomicCell::new(None),
             current_process_mode: AtomicCell::new(ProcessMode::Realtime),
-            input_events: AtomicRefCell::new(VecDeque::with_capacity(512)),
+            // MORPHWAVE PATCH: room for dense automation in large (e.g. offline) buffers; see push_bounded
+            input_events: AtomicRefCell::new(VecDeque::with_capacity(4096)),
             output_events: AtomicRefCell::new(VecDeque::with_capacity(512)),
             last_process_status: AtomicCell::new(ProcessStatus::Normal),
             current_latency: AtomicU32::new(0),
@@ -1431,7 +1432,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                     let normalized_value =
                         event.value as f32 / param_ptr.step_count().unwrap_or(1) as f32;
 
-                    input_events.push_back(NoteEvent::MonoAutomation {
+                    push_bounded(input_events, NoteEvent::MonoAutomation {
                         timing,
                         poly_modulation_id: *poly_modulation_id,
                         normalized_value,
@@ -1453,7 +1454,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                             // The host may also add key and channel information here, but it may
                             // also pass -1. So not having that information here at all seems like
                             // the safest choice.
-                            input_events.push_back(NoteEvent::PolyModulation {
+                            push_bounded(input_events, NoteEvent::PolyModulation {
                                 timing,
                                 voice_id: event.note_id,
                                 poly_modulation_id: *poly_modulation_id,
@@ -1484,7 +1485,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_ON) => {
                 if P::MIDI_INPUT >= MidiConfig::Basic {
                     let event = &*(event as *const clap_event_note);
-                    input_events.push_back(NoteEvent::NoteOn {
+                    push_bounded(input_events, NoteEvent::NoteOn {
                         // When splitting up the buffer for sample accurate automation all events
                         // should be relative to the block
                         timing,
@@ -1502,7 +1503,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF) => {
                 if P::MIDI_INPUT >= MidiConfig::Basic {
                     let event = &*(event as *const clap_event_note);
-                    input_events.push_back(NoteEvent::NoteOff {
+                    push_bounded(input_events, NoteEvent::NoteOff {
                         timing,
                         voice_id: if event.note_id != -1 {
                             Some(event.note_id)
@@ -1518,7 +1519,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_CHOKE) => {
                 if P::MIDI_INPUT >= MidiConfig::Basic {
                     let event = &*(event as *const clap_event_note);
-                    input_events.push_back(NoteEvent::Choke {
+                    push_bounded(input_events, NoteEvent::Choke {
                         timing,
                         voice_id: if event.note_id != -1 {
                             Some(event.note_id)
@@ -1537,7 +1538,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                     let event = &*(event as *const clap_event_note_expression);
                     match event.expression_id {
                         CLAP_NOTE_EXPRESSION_PRESSURE => {
-                            input_events.push_back(NoteEvent::PolyPressure {
+                            push_bounded(input_events, NoteEvent::PolyPressure {
                                 timing,
                                 voice_id: if event.note_id != -1 {
                                     Some(event.note_id)
@@ -1550,7 +1551,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                             });
                         }
                         CLAP_NOTE_EXPRESSION_VOLUME => {
-                            input_events.push_back(NoteEvent::PolyVolume {
+                            push_bounded(input_events, NoteEvent::PolyVolume {
                                 timing,
                                 voice_id: if event.note_id != -1 {
                                     Some(event.note_id)
@@ -1563,7 +1564,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                             });
                         }
                         CLAP_NOTE_EXPRESSION_PAN => {
-                            input_events.push_back(NoteEvent::PolyPan {
+                            push_bounded(input_events, NoteEvent::PolyPan {
                                 timing,
                                 voice_id: if event.note_id != -1 {
                                     Some(event.note_id)
@@ -1577,7 +1578,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                             });
                         }
                         CLAP_NOTE_EXPRESSION_TUNING => {
-                            input_events.push_back(NoteEvent::PolyTuning {
+                            push_bounded(input_events, NoteEvent::PolyTuning {
                                 timing,
                                 voice_id: if event.note_id != -1 {
                                     Some(event.note_id)
@@ -1590,7 +1591,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                             });
                         }
                         CLAP_NOTE_EXPRESSION_VIBRATO => {
-                            input_events.push_back(NoteEvent::PolyVibrato {
+                            push_bounded(input_events, NoteEvent::PolyVibrato {
                                 timing,
                                 voice_id: if event.note_id != -1 {
                                     Some(event.note_id)
@@ -1603,7 +1604,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                             });
                         }
                         CLAP_NOTE_EXPRESSION_EXPRESSION => {
-                            input_events.push_back(NoteEvent::PolyExpression {
+                            push_bounded(input_events, NoteEvent::PolyExpression {
                                 timing,
                                 voice_id: if event.note_id != -1 {
                                     Some(event.note_id)
@@ -1616,7 +1617,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                             });
                         }
                         CLAP_NOTE_EXPRESSION_BRIGHTNESS => {
-                            input_events.push_back(NoteEvent::PolyBrightness {
+                            push_bounded(input_events, NoteEvent::PolyBrightness {
                                 timing,
                                 voice_id: if event.note_id != -1 {
                                     Some(event.note_id)
@@ -1644,10 +1645,10 @@ impl<P: ClapPlugin> Wrapper<P> {
                         | NoteEvent::NoteOff { .. }
                         | NoteEvent::PolyPressure { .. }),
                     ) if P::MIDI_INPUT >= MidiConfig::Basic => {
-                        input_events.push_back(note_event);
+                        push_bounded(input_events, note_event);
                     }
                     Ok(note_event) if P::MIDI_INPUT >= MidiConfig::MidiCCs => {
-                        input_events.push_back(note_event);
+                        push_bounded(input_events, note_event);
                     }
                     Ok(_) => (),
                     Err(n) => nih_debug_assert_failure!("Unhandled MIDI message type {}", n),
@@ -1663,7 +1664,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 assert!(!event.buffer.is_null());
                 let sysex_buffer = std::slice::from_raw_parts(event.buffer, event.size as usize);
                 if let Ok(note_event) = NoteEvent::from_midi(timing, sysex_buffer) {
-                    input_events.push_back(note_event);
+                    push_bounded(input_events, note_event);
                 };
             }
             _ => {
@@ -3236,5 +3237,15 @@ unsafe fn query_host_extension<T>(
         Some(ClapPtr::new(extension_ptr as *const T))
     } else {
         None
+    }
+}
+
+/// MORPHWAVE PATCH: queue an input event without ever growing the queue, so `process()` never
+/// allocates. Events beyond the preallocated capacity are dropped (only possible with thousands of
+/// events in one buffer). Upstream grew the `VecDeque`, which allocated on the audio thread.
+fn push_bounded<T>(queue: &mut VecDeque<T>, event: T) {
+    // no logging when full: formatting a log message would allocate too
+    if queue.len() < queue.capacity() {
+        queue.push_back(event);
     }
 }

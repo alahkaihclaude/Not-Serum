@@ -114,6 +114,7 @@ To audit the whole shipped dependency tree again, run `cargo metadata` and check
 `vendor/` holds local copies of nih-plug (core), nih_plug_egui and egui-baseview with small fixes. Each copy's `PATCHES.md` explains them.
 - **State loading** ([robbert-vdh/nih-plug#275](https://github.com/robbert-vdh/nih-plug/issues/275), [#279](https://github.com/robbert-vdh/nih-plug/issues/279)): corrupt state no longer aborts the host, and the host is told when parameter values change.
 - **GUI resize:** the window can now be resized from inside the plugin.
+- **Event queue** (nih-plug): incoming MIDI and automation events no longer allocate on the audio thread when a buffer holds more than 512 of them. Found by the debug-build check in CI.
 - **Drag-and-drop** (egui-baseview): files dropped on the window now reach the GUI.
 
 clap-validator now runs every test with nothing skipped. Drop the copies once upstream has the fixes.
