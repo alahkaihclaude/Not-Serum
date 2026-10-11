@@ -25,3 +25,7 @@ strip = "symbols"
 hound = "3"
 # dev-only: `cargo run --example standalone` opens the GUI without a DAW (not shipped)
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683", default-features = false, features = ["standalone"] }
+
+# Vendored nih-plug core with two state-loading fixes (see vendor/nih-plug/PATCHES.md).
+[patch."https://github.com/robbert-vdh/nih-plug.git"]
+nih_plug = { path = "vendor/nih-plug" }

@@ -55,9 +55,13 @@ The plugin may be sold closed-source later, so every dependency that ships in th
 
 To audit the whole shipped dependency tree again, run `cargo metadata` and check each crate's `license` field. This was last done in Phase 2: every other crate is MIT, Apache-2.0, ISC, BSD or Zlib. `rfd` (Phase 3) has not been checked yet.
 
-## Known issues
+## Patched upstream code
 
-- **nih-plug state bugs.** clap-validator's `state-reproducibility-*` and `state-invalid-random` tests fail in nih-plug itself ([#275](https://github.com/robbert-vdh/nih-plug/issues/275), [#279](https://github.com/robbert-vdh/nih-plug/issues/279)). After a host loads state, the host isn't told that parameter values changed, and a corrupt state blob can abort the plugin instead of being rejected. CI skips these tests for now. Fix or patch them before Phase 3, which stores wavetables in the plugin state.
+`vendor/` holds local copies of nih-plug (core) and nih_plug_egui with small fixes. Each copy's `PATCHES.md` explains them.
+- **State loading** ([robbert-vdh/nih-plug#275](https://github.com/robbert-vdh/nih-plug/issues/275), [#279](https://github.com/robbert-vdh/nih-plug/issues/279)): corrupt state no longer aborts the host, and the host is told when parameter values change.
+- **GUI resize:** the window can now be resized from inside the plugin.
+
+clap-validator now runs every test with nothing skipped. Drop the copies once upstream has the fixes.
 
 ## Development
 
