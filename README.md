@@ -2,7 +2,7 @@
 
 A wavetable synthesizer plugin written in Rust with [nih-plug](https://github.com/robbert-vdh/nih-plug), for FL Studio on Windows x64.
 
-Status: **Phase 6, presets.**
+Status: **Phase 7, hardening for v1.0.**
 
 ## Using the GUI
 
@@ -76,7 +76,7 @@ Every build also uploads `Morphwave-demo-renders`: WAV files of the demo patches
 
 ## Install
 
-1. Open the latest green run under **Actions → build** and download the `Morphwave-windows` artifact. Unzip it.
+1. Download the zip from the newest entry on the repository's **Releases** page and unzip it. For a build that hasn't been released yet, open the latest green run under **Actions → build** and download the `Morphwave-windows` artifact.
 2. Close FL Studio.
 3. Copy `Morphwave.clap` to `C:\Program Files\Common Files\CLAP`.
 4. Start FL Studio and run **Options → Manage plugins → Find plugins**.
@@ -123,7 +123,36 @@ clap-validator now runs every test with nothing skipped. Drop the copies once up
 ```
 cargo test
 cargo xtask bundle morphwave --release
-cargo run --release --example render -- supersaw out.wav   # presets: init supersaw pluck bass pad; or `bench`
+cargo run --release --example render -- supersaw out.wav   # presets: init supersaw pluck bass pad wobble; or `bench`
 ```
 
-CI (`.github/workflows/build.yml`) runs on `windows-latest`. It runs the tests, bundles the plugin, runs [clap-validator](https://github.com/free-audio/clap-validator), and uploads `target/bundled/*` as the `Morphwave-windows` artifact.
+CI (`.github/workflows/build.yml`) runs on `windows-latest`:
+
+1. Runs the tests.
+2. Fuzzes a **debug** build with [clap-validator](https://github.com/free-audio/clap-validator). Debug builds abort if anything allocates memory on the audio thread, so this catches real-time-safety bugs.
+3. Validates the release build.
+4. Renders the demo patches and prints the CPU benchmark.
+5. Uploads the plugin as the `Morphwave-windows` artifact.
+
+**Pushing a `v*` tag** also publishes a GitHub Release containing `Morphwave-<tag>-windows.zip` (the plugin, README and third-party notices).
+
+Performance (Phase 7): 16 voices × 2 oscs × 8 unison, with the 24 dB filter and all five effects on, uses about 6% of one core in a release build. That's well under the 15% target, so no SIMD work was needed. Distortion has no oversampling yet, so heavy drive on bright sounds can alias. That's the first thing to add if it's audible.
+
+## Stress test before a release (in FL Studio)
+
+- [ ] Automate a few parameters on every page (SYNTH, MOD, FX) and play it back. The knobs should follow.
+- [ ] Change the sample rate in FL Studio's audio settings (44.1 → 48 → 96 kHz) while a project is open, then play again.
+- [ ] Change the buffer size (smallest to largest), then play again.
+- [ ] Export a project with **File → Export → WAV**. It should sound the same as live playback, tails included.
+- [ ] Play 16+ note chords with all effects on, and watch FL Studio's CPU meter.
+- [ ] Load a custom wavetable, save the project, reopen it, and load a few presets while playing.
+- [ ] Open two Morphwave instances at once and use both GUIs.
+
+## Before selling (not done yet)
+
+- [ ] **VST3:** needs permissive VST3 bindings (see Licensing). Until then, sell CLAP only.
+- [ ] **License audit:** rerun the audit (see Licensing) on the exact release build.
+- [ ] **Notices:** ship the full third-party license texts from `THIRD_PARTY.md` with the product.
+- [ ] **End-user license (EULA):** have one written. This needs a lawyer, not code.
+- [ ] **Installer and code signing:** consider an installer (e.g. Inno Setup) and Windows code signing, so users don't see SmartScreen warnings.
+- [ ] **Branding check:** keep Serum names, artwork and preset names out of everything shipped. One remains: the plugin's URL (`URL` in `src/lib.rs`) points to this repository, `Not-Serum`. Rename the repository or point the URL at a product page before selling.

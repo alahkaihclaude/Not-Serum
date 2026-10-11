@@ -7,6 +7,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write # lets tag builds publish a GitHub Release
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -18,16 +21,29 @@ jobs:
       - name: Test
         run: cargo test
 
-      - name: Bundle
-        run: cargo xtask bundle morphwave --release
-
-      - name: Validate CLAP
+      - name: Get clap-validator
         shell: pwsh
         run: |
           Invoke-WebRequest https://github.com/free-audio/clap-validator/releases/download/0.4.1/clap-validator-0.4.1-127-g152b982-windows.zip -OutFile cv.zip
           Expand-Archive cv.zip -DestinationPath cv
-          $exe = (Get-ChildItem cv -Recurse -Filter clap-validator.exe | Select-Object -First 1).FullName
-          & $exe validate --only-failed target/bundled/Morphwave.clap
+          Copy-Item (Get-ChildItem cv -Recurse -Filter clap-validator.exe | Select-Object -First 1).FullName clap-validator.exe
+
+      # Debug builds abort if anything allocates on the audio thread (nih-plug's assert_process_allocs),
+      # so fuzzing a debug build catches real-time-safety bugs the release build would hide.
+      - name: Validate debug build (audio-thread allocation check)
+        shell: pwsh
+        run: |
+          cargo xtask bundle morphwave
+          ./clap-validator.exe validate --only-failed target/bundled/Morphwave.clap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Bundle release
+        run: cargo xtask bundle morphwave --release
+
+      - name: Validate release build
+        shell: pwsh
+        run: |
+          ./clap-validator.exe validate --only-failed target/bundled/Morphwave.clap
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Render demos and benchmark
@@ -46,3 +62,13 @@ jobs:
         with:
           name: Morphwave-demo-renders
           path: renders/*.wav
+
+      - name: Publish GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = "Morphwave-$env:GITHUB_REF_NAME-windows.zip"
+          Compress-Archive -Path target/bundled/Morphwave.clap, README.md, THIRD_PARTY.md -DestinationPath $zip
+          gh release create $env:GITHUB_REF_NAME $zip --title "Morphwave $env:GITHUB_REF_NAME" --notes "Windows x64 CLAP plugin. Unzip and copy Morphwave.clap to C:\Program Files\Common Files\CLAP, then rescan plugins in FL Studio. See README.md for the manual."
