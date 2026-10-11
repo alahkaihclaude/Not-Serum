@@ -3,7 +3,7 @@ members = ["xtask"]
 
 [package]
 name = "morphwave"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 license = "LicenseRef-Proprietary"
 publish = false
@@ -22,6 +22,11 @@ nih_plug_egui = { path = "vendor/nih_plug_egui" }  # vendored with a resize fix,
 realfft = "3"
 rfd = "0.17"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Documents folder lookup (handles OneDrive-redirected Documents)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_System_Com", "Win32_Foundation"] }
 
 [profile.release]
 lto = "thin"

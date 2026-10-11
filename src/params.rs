@@ -679,6 +679,9 @@ pub struct MorphwaveParams {
     /// GUI window size. Persist keys are permanent too.
     #[persist = "editor-state"]
     pub editor_state: Arc<nih_plug_egui::EguiState>,
+    /// Name of the last loaded or saved preset, shown in the browser.
+    #[persist = "preset-name"]
+    pub preset_name: std::sync::Mutex<String>,
 
     #[nested(id_prefix = "osc_a", group = "Osc A")]
     pub osc_a: OscParams,
@@ -765,6 +768,7 @@ impl Default for MorphwaveParams {
         let d = Patch::default();
         Self {
             editor_state: crate::editor::default_state(),
+            preset_name: std::sync::Mutex::new("Init".into()),
             osc_a: OscParams::new("Osc A", &d.osc[0]),
             osc_b: OscParams::new("Osc B", &d.osc[1]),
 

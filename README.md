@@ -2,13 +2,13 @@
 
 A wavetable synthesizer plugin written in Rust with [nih-plug](https://github.com/robbert-vdh/nih-plug), for FL Studio on Windows x64.
 
-Status: **Phase 5, effects.**
+Status: **Phase 6, presets.**
 
 ## Using the GUI
 
 - **Knobs:** drag up or down to change the value. Hold **Shift** for fine adjustment. **Double-click** resets to the default. The value shows while you hover or drag.
 - **◀ ▶ selectors** step through wavetables, filter types, sub shapes and voice modes. **FILTER / ON** pills are switches.
-- **Size:** click **75% to 200%** at the top right, or drag the bottom-right corner.
+- **Size:** the **100%** button at the top right steps through 75%, 100%, 125%, 150% and 200%. You can also drag the bottom-right corner.
 
 ## Modulation (MOD page)
 
@@ -28,6 +28,16 @@ Click **MOD** at the top to switch pages.
 - **Example, 808 punch:** set Env 3 to Attack 0, Decay about 80 ms, Sustain 0. Add a slot with Env 3 → Pitch (all) at about 50% (+12 semitones).
 
 **Older projects:** the Phase 1 "Env 2 > Cutoff" knob is gone. When an older project loads, its value moves into mod slot 1 automatically, so it sounds the same. Automation clips that targeted that old knob no longer do anything.
+
+## Presets
+
+- **Browser:** it's at the top of the window. **◀ ▶** step through presets. Click the name for a list grouped by category (Bass, Lead, Pad, Pluck, Keys, FX), with **Init** at the top.
+- **SAVE** opens a small dialog for the name and category. Saving under an existing name replaces that file.
+- **Location:** presets are JSON files in `Documents\Morphwave\Presets\<Category>\<Name>.json`, so you can copy, share or delete them in Explorer. If Windows has moved your Documents folder (for example to OneDrive), Morphwave finds it there.
+- **Custom wavetables** are stored inside the preset, so a preset with your own WAV works on any computer.
+- **Factory bank:** 20 original presets are built into the plugin. They're copied to the folder the first time you open Morphwave's window, and never copied again after that, so a factory preset you delete stays deleted. Delete `Presets\.factory-v1` to get missing ones back.
+- **Updates:** each file carries a format number, and newer Morphwave versions migrate older files. Parameters added in later versions take their defaults when you load an older preset. A preset saved by a *newer* Morphwave is refused with a message instead of half-loading.
+- **FL Studio's own presets and projects** still save the full plugin state, as before.
 
 ## Effects (FX page)
 

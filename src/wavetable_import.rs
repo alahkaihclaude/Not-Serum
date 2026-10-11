@@ -214,6 +214,19 @@ impl TableSlot {
         }
     }
 
+    /// GUI thread, before a preset is applied: build its table here, so the `restore` that nih-plug may run
+    /// on the audio thread (during `initialize`) finds it ready instead of doing FFT work there.
+    pub fn preload(&self, stored: Option<&StoredTable>) {
+        let Some(s) = stored else { return };
+        if self.current.lock().unwrap().as_ref().is_some_and(|(_, _, c)| c == s) {
+            return;
+        }
+        match Self::build(s) {
+            Ok(table) => *self.current.lock().unwrap() = Some((s.name.clone(), table, s.clone())),
+            Err(e) => *self.error.lock().unwrap() = Some(format!("preset wavetable is damaged: {e}")),
+        }
+    }
+
     /// Main thread, after state load (`initialize`): rebuild from the project if it differs from what's loaded.
     /// Returns the table the synth should use for this osc.
     pub fn restore(&self, persisted: &Mutex<Option<StoredTable>>) -> Option<Arc<Wavetable>> {

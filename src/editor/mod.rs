@@ -1,6 +1,7 @@
 //! egui editor. Laid out on a fixed 1000x650 grid; dragging the corner scales it 75-200%.
 //! All parameter changes go through `ParamSetter`, so host automation and undo see them.
 
+mod browser;
 mod widgets;
 
 use crate::dsp::wavetable::Wavetable;
@@ -32,39 +33,49 @@ pub fn create(
     slots: Arc<[TableSlot; 2]>,
 ) -> Option<Box<dyn Editor>> {
     let state = params.editor_state.clone();
-    create_egui_editor(params.editor_state.clone(), Page::Synth, |_, _| {}, move |ctx, setter, page| {
+    create_egui_editor(params.editor_state.clone(), EditorUi::default(), |_, _| {}, move |ctx, setter, st| {
         ResizableWindow::new("morphwave").min_size(Vec2::new(W * 0.75, H * 0.75)).show(ctx, &state, |ui| {
             let avail = ui.max_rect();
             ui.painter().rect_filled(avail, 0.0, BG);
             let s = (avail.width() / W).min(avail.height() / H).clamp(0.75, 2.0);
             let l = Layout { origin: avail.center() - vec2(W, H) * s / 2.0, s };
-            header(ui, &l, page);
-            match page {
+            header(ui, &l, &mut st.page);
+            browser::bar(ui, &l, setter, &params, &slots, &mut st.browser, 400.0, 12.0);
+            scale_button(ui, &l, &state);
+            match st.page {
                 Page::Synth => draw(ui, &l, setter, &params, &tables, &slots),
                 Page::Mod => draw_mod(ui, &l, setter, &params),
                 Page::Fx => draw_fx(ui, &l, setter, &params),
             }
-            scale_presets(ui, &l, &state);
         });
     })
 }
 
-/// Header buttons that resize the window to a fixed scale (the corner drag covers everything in between).
-fn scale_presets(ui: &mut Ui, l: &Layout, state: &EguiState) {
-    for (i, pct) in [75u32, 100, 125, 150, 200].into_iter().enumerate() {
-        let rect = l.r(700.0 + i as f32 * 46.0, 14.0, 42.0, 18.0);
-        let resp = ui.interact(rect, ui.id().with(("scale", pct)), Sense::click());
-        if resp.clicked() {
-            state.set_requested_size((W as u32 * pct / 100, H as u32 * pct / 100));
-        }
-        let current = (l.s * 100.0 - pct as f32).abs() < 3.0;
-        let color = if current { ACCENT } else if resp.hovered() { TEXT } else { TEXT_DIM };
-        ui.painter().text(rect.center(), Align2::CENTER_CENTER, format!("{pct}%"), l.mono(10.0), color);
-    }
+/// GUI-only state, kept while the window is open.
+#[derive(Default)]
+pub struct EditorUi {
+    page: Page,
+    browser: browser::Browser,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+/// Window size: each click steps 75 -> 100 -> 125 -> 150 -> 200%. The corner drag covers everything in between.
+fn scale_button(ui: &mut Ui, l: &Layout, state: &EguiState) {
+    const STEPS: [u32; 5] = [75, 100, 125, 150, 200];
+    let now = (l.s * 100.0).round() as u32;
+    let rect = l.r(822.0, 12.0, 56.0, 22.0);
+    let resp = ui.interact(rect, ui.id().with("scale"), Sense::click());
+    if resp.clicked() {
+        let next = STEPS.iter().copied().find(|&s| s > now + 2).unwrap_or(STEPS[0]);
+        state.set_requested_size((W as u32 * next / 100, H as u32 * next / 100));
+    }
+    let p = ui.painter();
+    p.rect_stroke(rect, 4.0 * l.s, Stroke::new(1.0_f32, if resp.hovered() { ACCENT } else { PANEL_EDGE }), StrokeKind::Inside);
+    p.text(rect.center(), Align2::CENTER_CENTER, format!("{now}%"), l.mono(10.0), if resp.hovered() { TEXT } else { TEXT_DIM });
+}
+
+#[derive(Clone, Copy, PartialEq, Default)]
 pub enum Page {
+    #[default]
     Synth,
     Mod,
     Fx,
@@ -73,7 +84,6 @@ pub enum Page {
 fn header(ui: &mut Ui, l: &Layout, page: &mut Page) {
     let painter = ui.painter();
     painter.text(l.r(16.0, 22.0, 0.0, 0.0).min, Align2::LEFT_CENTER, "MORPHWAVE", l.font(20.0), ACCENT);
-    painter.text(l.r(150.0, 24.0, 0.0, 0.0).min, Align2::LEFT_CENTER, "wavetable synthesizer", l.font(11.0), TEXT_DIM);
     painter.text(
         l.r(984.0, 24.0, 0.0, 0.0).min,
         Align2::RIGHT_CENTER,
@@ -82,7 +92,7 @@ fn header(ui: &mut Ui, l: &Layout, page: &mut Page) {
         TEXT_DIM,
     );
     for (i, (tab, label)) in [(Page::Synth, "SYNTH"), (Page::Mod, "MOD"), (Page::Fx, "FX")].into_iter().enumerate() {
-        let rect = l.r(330.0 + i as f32 * 84.0, 12.0, 78.0, 22.0);
+        let rect = l.r(160.0 + i as f32 * 76.0, 12.0, 70.0, 22.0);
         let resp = ui.interact(rect, ui.id().with(("page", i)), Sense::click());
         if resp.clicked() {
             *page = tab;

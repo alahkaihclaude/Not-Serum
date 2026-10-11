@@ -5,6 +5,7 @@ use std::sync::Arc;
 pub mod dsp;
 mod editor;
 pub mod params;
+pub mod presets;
 pub mod voice;
 pub mod wavetable_import;
 

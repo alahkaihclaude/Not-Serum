@@ -144,7 +144,6 @@ impl Enable {
 }
 
 pub struct Fx {
-    sr: f32,
     dist: distortion::Distortion,
     chorus: chorus::Chorus,
     delay: delay::Delay,
@@ -156,7 +155,6 @@ impl Fx {
     /// Allocates delay/reverb memory for this sample rate.
     pub fn new(sample_rate: f32) -> Self {
         Self {
-            sr: sample_rate,
             dist: distortion::Distortion::new(sample_rate),
             chorus: chorus::Chorus::new(sample_rate),
             delay: delay::Delay::new(sample_rate),
