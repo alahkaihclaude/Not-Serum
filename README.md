@@ -2,7 +2,7 @@
 
 A wavetable synthesizer plugin written in Rust with [nih-plug](https://github.com/robbert-vdh/nih-plug), for FL Studio on Windows x64.
 
-Status: **Phase 7, hardening for v1.0.**
+Status: **v1.0.** All seven phases are complete, and the FL Studio stress test passed.
 
 ## Using the GUI
 
