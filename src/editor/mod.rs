@@ -15,7 +15,8 @@ use nih_plug_egui::resizable_window::ResizableWindow;
 use nih_plug_egui::{create_egui_editor, EguiState};
 use std::sync::Arc;
 use widgets::{
-    envelope_view, filter_view, knob, knob_mod, lfo_view, palette::*, panel, slider, stepper, toggle, wavetable_view, Layout,
+    dist_view, envelope_view, eq_view, filter_view, knob, knob_mod, lfo_view, palette::*, panel, slider, stepper, toggle,
+    wavetable_view, Layout,
 };
 
 const W: f32 = 1000.0;
@@ -41,6 +42,7 @@ pub fn create(
             match page {
                 Page::Synth => draw(ui, &l, setter, &params, &tables, &slots),
                 Page::Mod => draw_mod(ui, &l, setter, &params),
+                Page::Fx => draw_fx(ui, &l, setter, &params),
             }
             scale_presets(ui, &l, &state);
         });
@@ -65,6 +67,7 @@ fn scale_presets(ui: &mut Ui, l: &Layout, state: &EguiState) {
 pub enum Page {
     Synth,
     Mod,
+    Fx,
 }
 
 fn header(ui: &mut Ui, l: &Layout, page: &mut Page) {
@@ -78,7 +81,7 @@ fn header(ui: &mut Ui, l: &Layout, page: &mut Page) {
         l.mono(10.0),
         TEXT_DIM,
     );
-    for (i, (tab, label)) in [(Page::Synth, "SYNTH"), (Page::Mod, "MOD")].into_iter().enumerate() {
+    for (i, (tab, label)) in [(Page::Synth, "SYNTH"), (Page::Mod, "MOD"), (Page::Fx, "FX")].into_iter().enumerate() {
         let rect = l.r(330.0 + i as f32 * 84.0, 12.0, 78.0, 22.0);
         let resp = ui.interact(rect, ui.id().with(("page", i)), Sense::click());
         if resp.clicked() {
@@ -335,4 +338,73 @@ fn matrix(ui: &mut Ui, l: &Layout, setter: &ParamSetter, p: &MorphwaveParams) {
         slider(ui, l, setter, &s.amount, l.r(x + 300.0, ry, 124.0, 22.0));
         slider(ui, l, setter, &s.curve, l.r(x + 430.0, ry, 60.0, 22.0));
     }
+}
+
+fn draw_fx(ui: &mut Ui, l: &Layout, setter: &ParamSetter, p: &MorphwaveParams) {
+    let m = mod_sums(p);
+    let md = |d: Dest| m[d as usize];
+    let fx = &p.fx;
+    let at = |x: f32, y: f32| l.r(x, y, 0.0, 0.0).min;
+
+    // Distortion
+    let (x, y) = (10.0, 50.0);
+    panel(ui, l, l.r(x, y, 320.0, 290.0), "DISTORTION");
+    toggle(ui, l, setter, &fx.dist_on, l.r(x + 120.0, y + 7.0, 40.0, 18.0), "ON");
+    stepper(ui, l, setter, &fx.dist_mode, l.r(x + 170.0, y + 6.0, 140.0, 20.0));
+    let mode = crate::dsp::fx::DistMode::ALL[fx.dist_mode.value().to_index()];
+    dist_view(ui, l, l.r(x + 10.0, y + 32.0, 300.0, 140.0), mode, fx.dist_drive.value(), fx.dist_on.value());
+    knob_mod(ui, l, setter, &fx.dist_drive, at(x + 100.0, y + 225.0), "Drive", md(Dest::DistDrive));
+    knob_mod(ui, l, setter, &fx.dist_mix, at(x + 220.0, y + 225.0), "Mix", md(Dest::DistMix));
+
+    // Chorus
+    let (x, y) = (340.0, 50.0);
+    panel(ui, l, l.r(x, y, 230.0, 290.0), "CHORUS");
+    toggle(ui, l, setter, &fx.chorus_on, l.r(x + 180.0, y + 7.0, 40.0, 18.0), "ON");
+    knob(ui, l, setter, &fx.chorus_rate, at(x + 60.0, y + 100.0), "Rate");
+    knob(ui, l, setter, &fx.chorus_depth, at(x + 170.0, y + 100.0), "Depth");
+    knob_mod(ui, l, setter, &fx.chorus_mix, at(x + 115.0, y + 210.0), "Mix", md(Dest::ChorusMix));
+
+    // Delay
+    let (x, y) = (580.0, 50.0);
+    panel(ui, l, l.r(x, y, 410.0, 290.0), "DELAY");
+    toggle(ui, l, setter, &fx.delay_on, l.r(x + 360.0, y + 7.0, 40.0, 18.0), "ON");
+    toggle(ui, l, setter, &fx.delay_sync, l.r(x + 70.0, y + 7.0, 60.0, 18.0), "SYNC");
+    toggle(ui, l, setter, &fx.delay_pingpong, l.r(x + 140.0, y + 7.0, 90.0, 18.0), "PING-PONG");
+    if fx.delay_sync.value() {
+        knob(ui, l, setter, &fx.delay_division, at(x + 70.0, y + 100.0), "Time");
+    } else {
+        knob(ui, l, setter, &fx.delay_time, at(x + 70.0, y + 100.0), "Time");
+    }
+    knob_mod(ui, l, setter, &fx.delay_feedback, at(x + 205.0, y + 100.0), "Feedback", md(Dest::DelayFeedback));
+    knob(ui, l, setter, &fx.delay_tone, at(x + 340.0, y + 100.0), "Tone");
+    knob_mod(ui, l, setter, &fx.delay_mix, at(x + 205.0, y + 210.0), "Mix", md(Dest::DelayMix));
+
+    // Reverb
+    let (x, y) = (10.0, 350.0);
+    panel(ui, l, l.r(x, y, 400.0, 290.0), "REVERB");
+    toggle(ui, l, setter, &fx.reverb_on, l.r(x + 350.0, y + 7.0, 40.0, 18.0), "ON");
+    knob_mod(ui, l, setter, &fx.reverb_size, at(x + 70.0, y + 100.0), "Size", md(Dest::ReverbSize));
+    knob(ui, l, setter, &fx.reverb_damping, at(x + 200.0, y + 100.0), "Damping");
+    knob(ui, l, setter, &fx.reverb_width, at(x + 330.0, y + 100.0), "Width");
+    knob_mod(ui, l, setter, &fx.reverb_mix, at(x + 200.0, y + 210.0), "Mix", md(Dest::ReverbMix));
+
+    // EQ
+    let (x, y) = (420.0, 350.0);
+    panel(ui, l, l.r(x, y, 570.0, 290.0), "EQ");
+    toggle(ui, l, setter, &fx.eq_on, l.r(x + 520.0, y + 7.0, 40.0, 18.0), "ON");
+    eq_view(
+        ui,
+        l,
+        l.r(x + 10.0, y + 32.0, 550.0, 140.0),
+        fx.eq_low.value(),
+        fx.eq_mid.value(),
+        fx.eq_mid_freq.value(),
+        fx.eq_high.value(),
+        fx.eq_on.value(),
+    );
+    let col = |i: usize| x + 570.0 * (2 * i + 1) as f32 / 8.0;
+    knob_mod(ui, l, setter, &fx.eq_low, at(col(0), y + 225.0), "Low", md(Dest::EqLow));
+    knob_mod(ui, l, setter, &fx.eq_mid, at(col(1), y + 225.0), "Mid", md(Dest::EqMid));
+    knob(ui, l, setter, &fx.eq_mid_freq, at(col(2), y + 225.0), "Mid Freq");
+    knob_mod(ui, l, setter, &fx.eq_high, at(col(3), y + 225.0), "High", md(Dest::EqHigh));
 }

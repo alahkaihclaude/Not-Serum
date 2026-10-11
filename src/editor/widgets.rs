@@ -87,9 +87,11 @@ fn drag_param<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &P
     resp
 }
 
-/// Bipolar params (centered default, e.g. pan) light up from the middle.
+/// Bipolar params (centered default, range below zero, e.g. pan or semitones) light up from the middle.
 fn fill_origin<P: Param>(param: &P) -> f32 {
-    if (param.default_normalized_value() - 0.5).abs() < 1e-3 {
+    let min = param.normalized_value_to_string(0.0, false);
+    let below_zero = min.starts_with('-') || min.ends_with('L'); // "-12", or "100L" for pan
+    if below_zero && (param.default_normalized_value() - 0.5).abs() < 1e-3 {
         0.5
     } else {
         0.0
@@ -339,4 +341,43 @@ pub fn lfo_view(ui: &Ui, l: &Layout, rect: Rect, shape: crate::dsp::lfo::LfoShap
         })
         .collect();
     p.add(Shape::line(pts, Stroke::new(2.0 * l.s, MOD)));
+}
+
+/// Distortion transfer curve (input -> output) at the current drive, input range -1..1.
+pub fn dist_view(ui: &Ui, l: &Layout, rect: Rect, mode: crate::dsp::fx::DistMode, drive: f32, on: bool) {
+    let p = ui.painter().with_clip_rect(rect);
+    p.rect_filled(rect, 4.0 * l.s, SCREEN);
+    let inner = rect.shrink(8.0 * l.s);
+    let c = inner.center();
+    p.line_segment([pos2(inner.left(), c.y), pos2(inner.right(), c.y)], Stroke::new(1.0_f32, TRACK));
+    p.line_segment([pos2(c.x, inner.top()), pos2(c.x, inner.bottom())], Stroke::new(1.0_f32, TRACK));
+    let g = crate::dsp::fx::drive_gain(drive);
+    let pts: Vec<Pos2> = (0..=120)
+        .map(|i| {
+            let x = i as f32 / 60.0 - 1.0;
+            let y = mode.shape(x * g).clamp(-1.2, 1.2);
+            pos2(c.x + x * inner.width() / 2.0, c.y - y * inner.height() / 2.4)
+        })
+        .collect();
+    p.add(Shape::line(pts, Stroke::new(2.0 * l.s, if on { ACCENT } else { TRACK })));
+}
+
+/// EQ magnitude response, 20 Hz - 20 kHz log axis, +-18 dB.
+pub fn eq_view(ui: &Ui, l: &Layout, rect: Rect, low: f32, mid: f32, mid_hz: f32, high: f32, on: bool) {
+    const SR: f32 = 48000.0;
+    let p = ui.painter().with_clip_rect(rect);
+    p.rect_filled(rect, 4.0 * l.s, SCREEN);
+    let inner = rect.shrink(8.0 * l.s);
+    let y_of = |db: f32| inner.center().y - db.clamp(-18.0, 18.0) / 18.0 * inner.height() / 2.0;
+    p.line_segment([pos2(inner.left(), y_of(0.0)), pos2(inner.right(), y_of(0.0))], Stroke::new(1.0_f32, TRACK));
+    let bands = crate::dsp::fx::bands(low, mid, mid_hz, high, SR);
+    let pts: Vec<Pos2> = (0..=160)
+        .map(|i| {
+            let u = i as f32 / 160.0;
+            let f = 20.0 * 1000f32.powf(u);
+            let g: f32 = bands.iter().map(|b| b.magnitude(f, SR)).product();
+            pos2(inner.left() + u * inner.width(), y_of(20.0 * g.max(1e-6).log10()))
+        })
+        .collect();
+    p.add(Shape::line(pts, Stroke::new(2.0 * l.s, if on { ACCENT } else { TRACK })));
 }

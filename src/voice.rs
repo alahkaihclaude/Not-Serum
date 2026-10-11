@@ -2,8 +2,9 @@
 
 use crate::dsp::env::Adsr;
 use crate::dsp::filter::{Coefs, Filter, FilterMode};
+use crate::dsp::fx::{Fx, FxPatch};
 use crate::dsp::lfo::{division_beats, LfoShape, LfoState};
-use crate::dsp::modmatrix::{self, Dest, ModSlot, Source, NUM_SOURCES};
+use crate::dsp::modmatrix::{self, Dest, ModSlot, Source, NUM_DESTS, NUM_SOURCES};
 use crate::dsp::osc::{Osc, Unison, UnisonSettings};
 use crate::dsp::wavetable::{self, mip_for, Wavetable};
 use crate::dsp::{midi_to_hz, soft_clip, Rng};
@@ -103,6 +104,7 @@ pub struct Patch {
     pub lfo: [LfoPatch; 4],
     pub macros: [f32; 4],
     pub mods: [ModSlot; 16],
+    pub fx: FxPatch,
     pub voice_mode: VoiceMode,
     pub glide: f32,
     pub bend_range: f32,
@@ -157,6 +159,7 @@ impl Default for Patch {
                     ModSlot::default()
                 }
             }),
+            fx: FxPatch::default(),
             voice_mode: VoiceMode::Poly,
             glide: 0.0,
             bend_range: 2.0,
@@ -182,6 +185,8 @@ struct Voice {
     env: [Adsr; 3],
     /// Per-voice LFOs (used in retrigger mode).
     lfo: [LfoState; 4],
+    /// Last mod-matrix output, so the effects can follow the newest voice.
+    mods: Option<[f32; NUM_DESTS]>,
     /// Polyphonic aftertouch for this voice's note.
     pressure: f32,
     filter: Filter,
@@ -221,6 +226,9 @@ pub struct Synth {
     transport: Transport,
     /// Set by `set_transport`; synced free-running LFOs snap to the song position once per process call.
     snap_lfos: bool,
+    fx: Fx,
+    /// Mod-matrix output of the newest voice, applied to the effects (they process the summed signal).
+    fx_mods: [f32; NUM_DESTS],
 }
 
 impl Synth {
@@ -242,6 +250,8 @@ impl Synth {
             global_lfo: [LfoState::default(); 4],
             transport: Transport::default(),
             snap_lfos: false,
+            fx: Fx::new(sample_rate),
+            fx_mods: [0.0; NUM_DESTS],
         }
     }
 
@@ -275,7 +285,11 @@ impl Synth {
         std::mem::replace(&mut self.custom[osc], table)
     }
 
+    /// Reallocates effect buffers when the rate changes, so call it from `initialize`, not the audio thread.
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        if sample_rate != self.sample_rate {
+            self.fx = Fx::new(sample_rate);
+        }
         self.sample_rate = sample_rate;
     }
 
@@ -285,6 +299,7 @@ impl Synth {
         self.bend = 0.0;
         self.mod_wheel = 0.0;
         self.channel_pressure = 0.0;
+        self.fx.reset();
     }
 
     pub fn active_voices(&self) -> usize {
@@ -457,6 +472,11 @@ impl Synth {
             for (g, hz) in self.global_lfo.iter_mut().zip(lfo_hz) {
                 g.advance(hz * l.len() as f32 / self.sample_rate, &mut self.rng);
             }
+            // effects follow the newest sounding voice; with none sounding they keep the last values (tails)
+            if let Some(m) = self.voices.iter().filter(|v| v.active).max_by_key(|v| v.age).and_then(|v| v.mods) {
+                self.fx_mods = m;
+            }
+            self.fx.process(&patch.fx, &self.fx_mods, &self.transport, l, r);
             let gain = patch.master;
             for (l, r) in l.iter_mut().zip(r.iter_mut()) {
                 *l = soft_clip(*l * gain);
@@ -495,6 +515,7 @@ impl Voice {
 
         // shortcut: modulation is control-rate (once per BLOCK), fine for envelopes and LFOs up to ~50 Hz
         let m = modmatrix::evaluate(&p.mods, &self.sources(p, ctx));
+        self.mods = Some(m);
         let md = |d: Dest| m[d as usize];
         for k in 0..4 {
             if p.lfo[k].retrigger {

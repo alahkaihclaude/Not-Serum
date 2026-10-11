@@ -46,7 +46,7 @@ impl Source {
 pub const NUM_SOURCES: usize = Source::ALL.len();
 
 /// Modulation targets. Units at amount 100%: pitch +-24 semitones, cutoff +-8 octaves,
-/// LFO rate +-4 octaves, everything else the parameter's full 0..1 range.
+/// LFO rate +-4 octaves, everything else the parameter's full range. FX destinations follow the newest voice.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Dest {
     None,
@@ -76,11 +76,21 @@ pub enum Dest {
     Lfo2Rate,
     Lfo3Rate,
     Lfo4Rate,
+    DistDrive,
+    DistMix,
+    ChorusMix,
+    DelayMix,
+    DelayFeedback,
+    ReverbMix,
+    ReverbSize,
+    EqLow,
+    EqMid,
+    EqHigh,
 }
 
 impl Dest {
     /// Same order as the `Mod Destination` parameter.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 36] = [
         Self::None,
         Self::APosition,
         Self::ALevel,
@@ -107,6 +117,16 @@ impl Dest {
         Self::Lfo2Rate,
         Self::Lfo3Rate,
         Self::Lfo4Rate,
+        Self::DistDrive,
+        Self::DistMix,
+        Self::ChorusMix,
+        Self::DelayMix,
+        Self::DelayFeedback,
+        Self::ReverbMix,
+        Self::ReverbSize,
+        Self::EqLow,
+        Self::EqMid,
+        Self::EqHigh,
     ];
 
     /// First of the seven per-osc destinations for osc `i`.

@@ -1,6 +1,7 @@
 //! Host-visible parameters. IDs are permanent: never rename or remove one once shipped, only add.
 
 use crate::dsp::filter::FilterMode;
+use crate::dsp::fx::{DistMode, FxPatch, EQ_RANGE_DB};
 use crate::dsp::lfo::LfoShape;
 use crate::dsp::modmatrix::{Dest, ModSlot, Source};
 use crate::voice::{EnvPatch, LfoPatch, OscPatch, Patch, VoiceMode};
@@ -398,6 +399,36 @@ pub enum ModDest {
     #[id = "lfo4_rate"]
     #[name = "LFO 4 Rate"]
     Lfo4Rate,
+    #[id = "dist_drive"]
+    #[name = "Dist Drive"]
+    DistDrive,
+    #[id = "dist_mix"]
+    #[name = "Dist Mix"]
+    DistMix,
+    #[id = "chorus_mix"]
+    #[name = "Chorus Mix"]
+    ChorusMix,
+    #[id = "delay_mix"]
+    #[name = "Delay Mix"]
+    DelayMix,
+    #[id = "delay_fb"]
+    #[name = "Delay Feedback"]
+    DelayFeedback,
+    #[id = "reverb_mix"]
+    #[name = "Reverb Mix"]
+    ReverbMix,
+    #[id = "reverb_size"]
+    #[name = "Reverb Size"]
+    ReverbSize,
+    #[id = "eq_low"]
+    #[name = "EQ Low"]
+    EqLow,
+    #[id = "eq_mid"]
+    #[name = "EQ Mid"]
+    EqMid,
+    #[id = "eq_high"]
+    #[name = "EQ High"]
+    EqHigh,
 }
 
 #[derive(Params)]
@@ -479,6 +510,170 @@ impl SlotParams {
     }
 }
 
+/// Same order as `dsp::fx::DistMode::ALL`.
+#[derive(Enum, PartialEq, Clone, Copy)]
+pub enum DistModeParam {
+    #[id = "soft"]
+    Soft,
+    #[id = "hard"]
+    Hard,
+    #[id = "fold"]
+    Fold,
+    #[id = "asym"]
+    #[name = "Asymmetric"]
+    Asym,
+}
+
+fn db(name: &str, default: f32) -> FloatParam {
+    FloatParam::new(name, default, FloatRange::Linear { min: -EQ_RANGE_DB, max: EQ_RANGE_DB })
+        .with_smoother(SmoothingStyle::Linear(SMOOTH_MS))
+        .with_unit(" dB")
+        .with_step_size(0.1)
+}
+
+fn hz(name: &str, default: f32, min: f32, max: f32) -> FloatParam {
+    FloatParam::new(name, default, FloatRange::Skewed { min, max, factor: FloatRange::skew_factor(-1.5) })
+        .with_smoother(SmoothingStyle::Logarithmic(SMOOTH_MS))
+        .with_value_to_string(formatters::v2s_f32_hz_then_khz(1))
+        .with_string_to_value(formatters::s2v_f32_hz_then_khz())
+}
+
+#[derive(Params)]
+pub struct FxParams {
+    #[id = "dist_on"]
+    pub dist_on: BoolParam,
+    #[id = "dist_mode"]
+    pub dist_mode: EnumParam<DistModeParam>,
+    #[id = "dist_drive"]
+    pub dist_drive: FloatParam,
+    #[id = "dist_mix"]
+    pub dist_mix: FloatParam,
+
+    #[id = "chorus_on"]
+    pub chorus_on: BoolParam,
+    #[id = "chorus_rate"]
+    pub chorus_rate: FloatParam,
+    #[id = "chorus_depth"]
+    pub chorus_depth: FloatParam,
+    #[id = "chorus_mix"]
+    pub chorus_mix: FloatParam,
+
+    #[id = "delay_on"]
+    pub delay_on: BoolParam,
+    #[id = "delay_sync"]
+    pub delay_sync: BoolParam,
+    #[id = "delay_time"]
+    pub delay_time: FloatParam,
+    #[id = "delay_div"]
+    pub delay_division: EnumParam<Division>,
+    #[id = "delay_fb"]
+    pub delay_feedback: FloatParam,
+    #[id = "delay_pingpong"]
+    pub delay_pingpong: BoolParam,
+    #[id = "delay_tone"]
+    pub delay_tone: FloatParam,
+    #[id = "delay_mix"]
+    pub delay_mix: FloatParam,
+
+    #[id = "reverb_on"]
+    pub reverb_on: BoolParam,
+    #[id = "reverb_size"]
+    pub reverb_size: FloatParam,
+    #[id = "reverb_damp"]
+    pub reverb_damping: FloatParam,
+    #[id = "reverb_width"]
+    pub reverb_width: FloatParam,
+    #[id = "reverb_mix"]
+    pub reverb_mix: FloatParam,
+
+    #[id = "eq_on"]
+    pub eq_on: BoolParam,
+    #[id = "eq_low"]
+    pub eq_low: FloatParam,
+    #[id = "eq_mid"]
+    pub eq_mid: FloatParam,
+    #[id = "eq_mid_freq"]
+    pub eq_mid_freq: FloatParam,
+    #[id = "eq_high"]
+    pub eq_high: FloatParam,
+}
+
+impl FxParams {
+    fn new(d: &FxPatch) -> Self {
+        Self {
+            dist_on: BoolParam::new("Distortion On", d.dist_on),
+            dist_mode: EnumParam::new("Distortion Mode", DistModeParam::from_index(d.dist_mode as usize)),
+            dist_drive: percent("Distortion Drive".into(), d.dist_drive, 0.0),
+            dist_mix: percent("Distortion Mix".into(), d.dist_mix, 0.0),
+            chorus_on: BoolParam::new("Chorus On", d.chorus_on),
+            chorus_rate: FloatParam::new(
+                "Chorus Rate",
+                d.chorus_rate,
+                FloatRange::Skewed { min: 0.05, max: 5.0, factor: FloatRange::skew_factor(-1.0) },
+            )
+            .with_unit(" Hz")
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
+            chorus_depth: percent("Chorus Depth".into(), d.chorus_depth, 0.0),
+            chorus_mix: percent("Chorus Mix".into(), d.chorus_mix, 0.0),
+            delay_on: BoolParam::new("Delay On", d.delay_on),
+            delay_sync: BoolParam::new("Delay Sync", d.delay_sync),
+            delay_time: FloatParam::new(
+                "Delay Time",
+                d.delay_ms,
+                FloatRange::Skewed { min: 1.0, max: 2000.0, factor: FloatRange::skew_factor(-1.0) },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
+            delay_division: EnumParam::new("Delay Division", Division::from_index(d.delay_division)),
+            delay_feedback: percent("Delay Feedback".into(), d.delay_feedback, 0.0),
+            delay_pingpong: BoolParam::new("Delay Ping-Pong", d.delay_pingpong),
+            delay_tone: hz("Delay Tone", d.delay_tone, 200.0, 20000.0),
+            delay_mix: percent("Delay Mix".into(), d.delay_mix, 0.0),
+            reverb_on: BoolParam::new("Reverb On", d.reverb_on),
+            reverb_size: percent("Reverb Size".into(), d.reverb_size, 0.0),
+            reverb_damping: percent("Reverb Damping".into(), d.reverb_damping, 0.0),
+            reverb_width: percent("Reverb Width".into(), d.reverb_width, 0.0),
+            reverb_mix: percent("Reverb Mix".into(), d.reverb_mix, 0.0),
+            eq_on: BoolParam::new("EQ On", d.eq_on),
+            eq_low: db("EQ Low", d.eq_low),
+            eq_mid: db("EQ Mid", d.eq_mid),
+            eq_mid_freq: hz("EQ Mid Freq", d.eq_mid_freq, 200.0, 8000.0),
+            eq_high: db("EQ High", d.eq_high),
+        }
+    }
+
+    fn patch(&self, n: u32) -> FxPatch {
+        FxPatch {
+            dist_on: self.dist_on.value(),
+            dist_mode: DistMode::ALL[self.dist_mode.value().to_index()],
+            dist_drive: self.dist_drive.smoothed.next_step(n),
+            dist_mix: self.dist_mix.smoothed.next_step(n),
+            chorus_on: self.chorus_on.value(),
+            chorus_rate: self.chorus_rate.value(),
+            chorus_depth: self.chorus_depth.smoothed.next_step(n),
+            chorus_mix: self.chorus_mix.smoothed.next_step(n),
+            delay_on: self.delay_on.value(),
+            delay_sync: self.delay_sync.value(),
+            delay_ms: self.delay_time.value(),
+            delay_division: self.delay_division.value().to_index(),
+            delay_feedback: self.delay_feedback.smoothed.next_step(n),
+            delay_pingpong: self.delay_pingpong.value(),
+            delay_tone: self.delay_tone.smoothed.next_step(n),
+            delay_mix: self.delay_mix.smoothed.next_step(n),
+            reverb_on: self.reverb_on.value(),
+            reverb_size: self.reverb_size.smoothed.next_step(n),
+            reverb_damping: self.reverb_damping.smoothed.next_step(n),
+            reverb_width: self.reverb_width.smoothed.next_step(n),
+            reverb_mix: self.reverb_mix.smoothed.next_step(n),
+            eq_on: self.eq_on.value(),
+            eq_low: self.eq_low.smoothed.next_step(n),
+            eq_mid: self.eq_mid.smoothed.next_step(n),
+            eq_mid_freq: self.eq_mid_freq.smoothed.next_step(n),
+            eq_high: self.eq_high.smoothed.next_step(n),
+        }
+    }
+}
+
 #[derive(Params)]
 pub struct MorphwaveParams {
     /// GUI window size. Persist keys are permanent too.
@@ -546,6 +741,9 @@ pub struct MorphwaveParams {
     #[id = "macro4"]
     pub macro4: FloatParam,
 
+    #[nested(group = "FX")]
+    pub fx: FxParams,
+
     /// Mod matrix. Param IDs are `src_1`, `dst_1`, `amt_1`, `curve_1` ... `_16`.
     #[nested(array, group = "Mod")]
     pub mods: [SlotParams; 16],
@@ -605,6 +803,7 @@ impl Default for MorphwaveParams {
             macro3: percent("Macro 3".into(), d.macros[2], 0.0),
             macro4: percent("Macro 4".into(), d.macros[3], 0.0),
             mods: std::array::from_fn(|i| SlotParams::new(i, &d.mods[i])),
+            fx: FxParams::new(&d.fx),
 
             voice_mode: EnumParam::new("Voice Mode", Mode::Poly),
             glide: seconds("Glide".into(), d.glide, 5.0),
@@ -654,6 +853,7 @@ impl MorphwaveParams {
                 self.macro4.smoothed.next_step(n),
             ],
             mods: std::array::from_fn(|i| self.mods[i].patch(n)),
+            fx: self.fx.patch(n),
             voice_mode: VoiceMode::ALL[self.voice_mode.value().to_index()],
             glide: self.glide.value(),
             bend_range: self.bend_range.value() as f32,
@@ -675,6 +875,7 @@ mod tests {
         assert_eq!(ModDest::variants().len(), Dest::ALL.len());
         assert_eq!(Division::variants().len(), DIVISIONS.len());
         assert_eq!(LfoShapeParam::variants().len(), LfoShape::ALL.len());
+        assert_eq!(DistModeParam::variants().len(), DistMode::ALL.len());
         assert_eq!(FilterType::variants().len(), FilterMode::ALL.len());
         assert_eq!(Mode::variants().len(), VoiceMode::ALL.len());
         assert_eq!(Table::variants().len(), crate::dsp::wavetable::builtin().len() + 1); // + Custom

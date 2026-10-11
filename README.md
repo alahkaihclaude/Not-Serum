@@ -2,7 +2,7 @@
 
 A wavetable synthesizer plugin written in Rust with [nih-plug](https://github.com/robbert-vdh/nih-plug), for FL Studio on Windows x64.
 
-Status: **Phase 4, LFOs and mod matrix.**
+Status: **Phase 5, effects.**
 
 ## Using the GUI
 
@@ -20,7 +20,7 @@ Click **MOD** at the top to switch pages.
 - **Env 3** and **Macro 1–4** are extra sources. Macros are host parameters, so you can link them to MIDI controllers in FL Studio.
 - **Mod matrix:** 16 slots, each with a source, a destination, an amount (−100% to +100%) and a curve.
   - Sources: Env 1–3, LFO 1–4, Velocity, Mod Wheel, Aftertouch (channel or polyphonic), Note and Macro 1–4.
-  - Destinations: oscillator position, level, pan, pitch, detune, blend and width (per osc), Pitch (all), sub and noise level, cutoff, resonance, drive, volume, and LFO rates.
+  - Destinations: oscillator position, level, pan, pitch, detune, blend and width (per osc), Pitch (all), sub and noise level, cutoff, resonance, drive, volume, LFO rates, and the effect controls (distortion drive/mix, chorus mix, delay mix/feedback, reverb mix/size, EQ gains).
   - At 100%: pitch moves ±24 semitones, cutoff ±8 octaves, LFO rate ±4 octaves, and everything else across its full range.
 - Click a selector's name to pick from a list, or use ◀ ▶.
 - Modulation runs per voice and never moves the knob itself. A **teal ring** around a knob on the SYNTH page shows how far it's being modulated.
@@ -28,6 +28,20 @@ Click **MOD** at the top to switch pages.
 - **Example, 808 punch:** set Env 3 to Attack 0, Decay about 80 ms, Sustain 0. Add a slot with Env 3 → Pitch (all) at about 50% (+12 semitones).
 
 **Older projects:** the Phase 1 "Env 2 > Cutoff" knob is gone. When an older project loads, its value moves into mod slot 1 automatically, so it sounds the same. Automation clips that targeted that old knob no longer do anything.
+
+## Effects (FX page)
+
+The effects run in this fixed order, after all voices are mixed: **Distortion → Chorus → Delay → Reverb → EQ → Master**.
+
+- **Distortion:** Soft (tanh), Hard clip, Fold (wavefolder) and Asymmetric (tube-like). Drive goes up to +36 dB with rough level compensation. The display shows the curve.
+- **Chorus:** two modulated delay lines, with left and right 90° apart. Rate, Depth and Mix.
+- **Delay:** time in ms, or **SYNC** to tempo (1/32 to 8 bars). Also Feedback, **PING-PONG**, a Tone low-pass in the feedback loop, and Mix. Changing the time glides like tape instead of clicking.
+- **Reverb:** a Freeverb-style room with Size, Damping, Width and Mix.
+- **EQ:** low shelf at 200 Hz, a peak with adjustable frequency, and a high shelf at 5 kHz, each ±15 dB. The display shows the response.
+
+Each effect has an **ON** switch. Switching fades over about 10 ms, so it doesn't click. While an effect is on, its delay and reverb tails keep ringing after you release the notes.
+
+Mix, drive, feedback, size and the EQ gains are also **mod matrix destinations**. The effects process the mixed signal, not single notes, so their modulation follows the most recently played note.
 
 ## Custom wavetables
 
@@ -45,6 +59,7 @@ Click **MOD** at the top to switch pages.
 - **Filter.** LP/HP/BP at 12 or 24 dB, with cutoff, resonance, drive and key tracking. Each source has a "To Filter" switch; when it's off, that source skips the filter.
 - **Env 1** always controls volume. **Env 2** and **Env 3** are free modulation sources. Mod slot 1 comes pre-wired as Env 2 → Cutoff at 0%.
 - **Voices.** 16-voice poly with click-free voice stealing, plus Mono and Legato modes. Glide and pitch-bend range.
+- **Effects (FX page):** see below.
 - **Master** volume, followed by an output soft-clip that never goes above 0 dBFS.
 
 Every build also uploads `Morphwave-demo-renders`: WAV files of the demo patches (a chord, a filter sweep and a scale up to C8). You can listen to those without FL Studio.

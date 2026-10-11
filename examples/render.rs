@@ -22,6 +22,9 @@ fn preset(name: &str) -> Option<Patch> {
             p.osc[1].octave = -1;
             p.osc[1].level = 0.5;
             p.env[0].release = 0.5;
+            p.fx.chorus_on = true;
+            p.fx.delay_on = true;
+            p.fx.reverb_on = true;
         }
         "pluck" => {
             p.osc[0].position = 1.0; // square
@@ -109,6 +112,7 @@ fn bench() {
     }
     p.filter_on = true;
     p.filter_mode = FilterMode::Lp24;
+    p.fx = morphwave::dsp::fx::FxPatch { dist_on: true, chorus_on: true, delay_on: true, reverb_on: true, eq_on: true, ..p.fx };
     let mut synth = Synth::new(SR);
     for n in 0..16 {
         synth.note_on(&p, 40 + n * 3, 0.8);
@@ -121,7 +125,7 @@ fn bench() {
         synth.render(&p, &mut l, &mut r);
     }
     let cpu = t.elapsed().as_secs_f32() / seconds * 100.0;
-    println!("16 voices x 2 osc x 8 unison, LP24 on: {cpu:.1}% of one core (target < 15%)");
+    println!("16 voices x 2 osc x 8 unison, LP24 + all FX on: {cpu:.1}% of one core (target < 15%)");
 }
 
 fn main() {
