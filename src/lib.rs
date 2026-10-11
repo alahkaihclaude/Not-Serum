@@ -2,6 +2,7 @@ use nih_plug::prelude::*;
 use std::sync::Arc;
 
 pub mod dsp;
+mod editor;
 pub mod params;
 pub mod voice;
 
@@ -43,6 +44,10 @@ impl Plugin for Morphwave {
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
+    }
+
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        editor::create(self.params.clone(), self.synth.tables())
     }
 
     fn initialize(

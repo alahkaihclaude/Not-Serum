@@ -1,0 +1,236 @@
+//! Hand-painted widgets. Every size is multiplied by the layout scale, so the whole GUI scales with the window.
+
+use crate::dsp::wavetable::Wavetable;
+use crate::voice::EnvPatch;
+use nih_plug::prelude::{Param, ParamSetter};
+use nih_plug_egui::egui::{self, pos2, vec2, Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui};
+use std::f32::consts::PI;
+
+pub mod palette {
+    use super::Color32;
+    pub const BG: Color32 = Color32::from_rgb(0x17, 0x14, 0x1c);
+    pub const PANEL: Color32 = Color32::from_rgb(0x24, 0x1f, 0x2b);
+    pub const PANEL_EDGE: Color32 = Color32::from_rgb(0x3a, 0x32, 0x44);
+    pub const SCREEN: Color32 = Color32::from_rgb(0x10, 0x0e, 0x13);
+    pub const ACCENT: Color32 = Color32::from_rgb(0xf2, 0xa5, 0x41);
+    pub const TEXT: Color32 = Color32::from_rgb(0xed, 0xe6, 0xda);
+    pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8f, 0x86, 0x96);
+    pub const TRACK: Color32 = Color32::from_rgb(0x3d, 0x35, 0x47);
+}
+use palette::*;
+
+/// Maps the 1000x650 design grid onto the window.
+#[derive(Clone, Copy)]
+pub struct Layout {
+    pub origin: Pos2,
+    pub s: f32,
+}
+
+impl Layout {
+    pub fn r(&self, x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect::from_min_size(self.origin + vec2(x, y) * self.s, vec2(w, h) * self.s)
+    }
+
+    pub fn font(&self, size: f32) -> FontId {
+        FontId::proportional(size * self.s)
+    }
+
+    pub fn mono(&self, size: f32) -> FontId {
+        FontId::monospace(size * self.s)
+    }
+}
+
+pub fn panel(ui: &Ui, l: &Layout, rect: Rect, title: &str) {
+    let p = ui.painter();
+    p.rect_filled(rect, 6.0 * l.s, PANEL);
+    p.rect_stroke(rect, 6.0 * l.s, Stroke::new(1.0_f32, PANEL_EDGE), StrokeKind::Inside);
+    p.text(rect.min + vec2(10.0, 8.0) * l.s, Align2::LEFT_TOP, title, l.font(13.0), ACCENT);
+}
+
+fn arc(center: Pos2, radius: f32, from: f32, to: f32) -> Vec<Pos2> {
+    let n = ((to - from).abs() * 12.0).ceil().max(2.0) as usize;
+    (0..=n)
+        .map(|i| {
+            let a = from + (to - from) * i as f32 / n as f32;
+            center + vec2(a.cos(), a.sin()) * radius
+        })
+        .collect()
+}
+
+/// Rotary knob: drag vertically (Shift for fine), double-click to reset. Shows the value while hovered or dragged.
+pub fn knob<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &P, center: Pos2, label: &str) {
+    let radius = 15.0 * l.s;
+    let rect = Rect::from_center_size(center + vec2(0.0, 6.0 * l.s), vec2(48.0, 52.0) * l.s);
+    let id = ui.id().with(param.name());
+    let resp = ui.interact(rect, id, Sense::click_and_drag());
+
+    if resp.double_clicked() {
+        setter.begin_set_parameter(param);
+        setter.set_parameter_normalized(param, param.default_normalized_value());
+        setter.end_set_parameter(param);
+    } else if resp.drag_started() {
+        setter.begin_set_parameter(param);
+        ui.data_mut(|d| d.insert_temp(id, param.unmodulated_normalized_value()));
+    }
+    if resp.dragged() {
+        let fine = ui.input(|i| i.modifiers.shift);
+        let per_px = if fine { 0.0005 } else { 0.005 };
+        // accumulate unquantized so stepped (int/enum) params still move with slow drags
+        let v = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(0.0) - resp.drag_delta().y / l.s * per_px;
+        let v = v.clamp(0.0, 1.0);
+        ui.data_mut(|d| d.insert_temp(id, v));
+        setter.set_parameter_normalized(param, v);
+    }
+    if resp.drag_stopped() {
+        setter.end_set_parameter(param);
+    }
+
+    let value = param.unmodulated_normalized_value();
+    let (start, sweep) = (0.75 * PI, 1.5 * PI);
+    let p = ui.painter();
+    let stroke_w = 3.5 * l.s;
+    p.add(Shape::line(arc(center, radius, start, start + sweep), Stroke::new(stroke_w, TRACK)));
+    // bipolar params (centered default, e.g. pan) light up from 12 o'clock
+    let from = if (param.default_normalized_value() - 0.5).abs() < 1e-3 { 0.5 } else { 0.0 };
+    if (value - from).abs() > 0.001 {
+        p.add(Shape::line(
+            arc(center, radius, start + sweep * from.min(value), start + sweep * from.max(value)),
+            Stroke::new(stroke_w, ACCENT),
+        ));
+    }
+    let a = start + sweep * value;
+    p.line_segment(
+        [center + vec2(a.cos(), a.sin()) * radius * 0.35, center + vec2(a.cos(), a.sin()) * radius * 0.85],
+        Stroke::new(2.0 * l.s, TEXT),
+    );
+
+    let text_pos = center + vec2(0.0, radius + 4.0 * l.s);
+    if resp.hovered() || resp.dragged() {
+        p.text(text_pos, Align2::CENTER_TOP, param.normalized_value_to_string(value, true), l.mono(10.0), ACCENT);
+    } else {
+        p.text(text_pos, Align2::CENTER_TOP, label, l.font(10.5), TEXT_DIM);
+    }
+}
+
+/// Small on/off pill.
+pub fn toggle<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &P, rect: Rect, label: &str) {
+    let resp = ui.interact(rect, ui.id().with(param.name()), Sense::click());
+    let on = param.unmodulated_normalized_value() > 0.5;
+    if resp.clicked() {
+        setter.begin_set_parameter(param);
+        setter.set_parameter_normalized(param, if on { 0.0 } else { 1.0 });
+        setter.end_set_parameter(param);
+    }
+    let p = ui.painter();
+    p.rect_filled(rect, rect.height() / 2.0, if on { ACCENT } else { TRACK });
+    p.text(rect.center(), Align2::CENTER_CENTER, label, l.font(10.0), if on { BG } else { TEXT_DIM });
+}
+
+/// `◀ value ▶` selector for enum and small int params.
+pub fn stepper<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &P, rect: Rect) {
+    let id = ui.id().with(param.name());
+    let arrow_w = rect.height();
+    let left = Rect::from_min_size(rect.min, vec2(arrow_w, rect.height()));
+    let right = Rect::from_min_size(pos2(rect.max.x - arrow_w, rect.min.y), vec2(arrow_w, rect.height()));
+    let value = param.unmodulated_normalized_value();
+    for (r, next, glyph) in [(left, false, "◀"), (right, true, "▶")] {
+        let resp = ui.interact(r, id.with(next), Sense::click());
+        if resp.clicked() {
+            let v = if next { param.next_normalized_step(value, false) } else { param.previous_normalized_step(value, false) };
+            setter.begin_set_parameter(param);
+            setter.set_parameter_normalized(param, v);
+            setter.end_set_parameter(param);
+        }
+        let color = if resp.hovered() { ACCENT } else { TEXT_DIM };
+        ui.painter().text(r.center(), Align2::CENTER_CENTER, glyph, l.font(9.0), color);
+    }
+    let p = ui.painter();
+    p.rect_stroke(rect, 3.0 * l.s, Stroke::new(1.0_f32, PANEL_EDGE), StrokeKind::Inside);
+    p.text(rect.center(), Align2::CENTER_CENTER, param.normalized_value_to_string(value, true), l.font(11.0), TEXT);
+}
+
+/// Current frame up front, the other frames stacked behind it in a faint 3D-ish fan.
+pub fn wavetable_view(ui: &Ui, l: &Layout, rect: Rect, table: &Wavetable, position: f32) {
+    let p = ui.painter().with_clip_rect(rect);
+    p.rect_filled(rect, 4.0 * l.s, SCREEN);
+    let frames = table.frames();
+    let frame_pos = position * (frames - 1) as f32;
+    let depth = vec2(28.0, -22.0) * l.s; // offset from first to last frame
+    let front = Rect::from_min_max(rect.min + vec2(10.0 * l.s, -depth.y + 8.0 * l.s), rect.max - vec2(depth.x + 10.0 * l.s, 8.0 * l.s));
+    const POINTS: usize = 96;
+    let trace = |frame: f32, offset: egui::Vec2| -> Vec<Pos2> {
+        (0..=POINTS)
+            .map(|i| {
+                let x = i as f32 / POINTS as f32;
+                let y = table.sample(frame, 0, x.min(0.9999));
+                pos2(front.left() + x * front.width(), front.center().y - y * front.height() * 0.45) + offset
+            })
+            .collect()
+    };
+    let shown = frames.min(24);
+    for k in (0..shown).rev() {
+        let t = if shown == 1 { 0.0 } else { k as f32 / (shown - 1) as f32 };
+        p.add(Shape::line(trace(t * (frames - 1) as f32, depth * t), Stroke::new(1.0_f32, TRACK)));
+    }
+    let t = position;
+    p.add(Shape::line(trace(frame_pos, depth * t), Stroke::new(2.0 * l.s, ACCENT)));
+    p.text(rect.right_bottom() - vec2(6.0, 4.0) * l.s, Align2::RIGHT_BOTTOM, format!("{:.0}%", position * 100.0), l.mono(10.0), TEXT_DIM);
+}
+
+/// ADSR outline. Segment widths use a square-root time scale so short and long times both stay readable.
+pub fn envelope_view(ui: &Ui, l: &Layout, rect: Rect, e: &EnvPatch) {
+    let p = ui.painter().with_clip_rect(rect);
+    p.rect_filled(rect, 4.0 * l.s, SCREEN);
+    let inner = rect.shrink(8.0 * l.s);
+    let w = |t: f32| t.max(0.0).sqrt() + 0.05;
+    let (a, d, hold, r) = (w(e.attack), w(e.decay), 0.6, w(e.release));
+    let total = a + d + hold + r;
+    let x = |u: f32| inner.left() + u / total * inner.width();
+    let y = |v: f32| inner.bottom() - v * inner.height();
+    let mut pts = vec![pos2(x(0.0), y(0.0)), pos2(x(a), y(1.0))];
+    // decay and release are exponential, so draw them as curves
+    for i in 1..=16 {
+        let u = i as f32 / 16.0;
+        pts.push(pos2(x(a + d * u), y(e.sustain + (1.0 - e.sustain) * (-6.9 * u).exp())));
+    }
+    pts.push(pos2(x(a + d + hold), y(e.sustain)));
+    for i in 1..=16 {
+        let u = i as f32 / 16.0;
+        pts.push(pos2(x(a + d + hold + r * u), y(e.sustain * (-6.9 * u).exp())));
+    }
+    p.line_segment([pos2(inner.left(), y(0.0)), pos2(inner.right(), y(0.0))], Stroke::new(1.0_f32, TRACK));
+    p.add(Shape::line(pts, Stroke::new(2.0 * l.s, ACCENT)));
+}
+
+/// Magnitude response of the SVF (analytic), on a 20 Hz - 20 kHz log axis, -36..+18 dB.
+pub fn filter_view(ui: &Ui, l: &Layout, rect: Rect, on: bool, mode: usize, cutoff: f32, resonance: f32) {
+    let p = ui.painter().with_clip_rect(rect);
+    p.rect_filled(rect, 4.0 * l.s, SCREEN);
+    let inner = rect.shrink(8.0 * l.s);
+    let y_of_db = |db: f32| inner.top() + (18.0 - db.clamp(-40.0, 20.0)) / 54.0 * inner.height();
+    p.line_segment([pos2(inner.left(), y_of_db(0.0)), pos2(inner.right(), y_of_db(0.0))], Stroke::new(1.0_f32, TRACK));
+    // same k as dsp::filter::Coefs
+    let k1 = 2.0 - 1.98 * resonance;
+    let k2 = 2.0 - 1.98 * 0.3;
+    let stage = |x: f32, k: f32| {
+        let den = ((1.0 - x * x).powi(2) + (k * x).powi(2)).sqrt();
+        match mode / 2 {
+            0 => 1.0 / den,
+            1 => x * x / den,
+            _ => k * x / den,
+        }
+    };
+    let pts: Vec<Pos2> = (0..=120)
+        .map(|i| {
+            let u = i as f32 / 120.0;
+            let f = 20.0 * 1000f32.powf(u);
+            let x = f / cutoff;
+            let mut g = stage(x, k1);
+            if mode % 2 == 1 {
+                g *= stage(x, k2);
+            }
+            pos2(inner.left() + u * inner.width(), y_of_db(20.0 * g.max(1e-6).log10()))
+        })
+        .collect();
+    p.add(Shape::line(pts, Stroke::new(2.0 * l.s, if on { ACCENT } else { TRACK })));
+}

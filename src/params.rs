@@ -198,6 +198,10 @@ impl EnvParams {
 
 #[derive(Params)]
 pub struct MorphwaveParams {
+    /// GUI window size. Persist keys are permanent too.
+    #[persist = "editor-state"]
+    pub editor_state: Arc<nih_plug_egui::EguiState>,
+
     #[nested(id_prefix = "osc_a", group = "Osc A")]
     pub osc_a: OscParams,
     #[nested(id_prefix = "osc_b", group = "Osc B")]
@@ -253,6 +257,7 @@ impl Default for MorphwaveParams {
     fn default() -> Self {
         let d = Patch::default();
         Self {
+            editor_state: crate::editor::default_state(),
             osc_a: OscParams::new("Osc A", &d.osc[0]),
             osc_b: OscParams::new("Osc B", &d.osc[1]),
 

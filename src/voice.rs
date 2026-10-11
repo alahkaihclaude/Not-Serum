@@ -172,6 +172,11 @@ impl Synth {
         }
     }
 
+    /// Shared with the GUI for drawing.
+    pub fn tables(&self) -> Arc<Vec<Wavetable>> {
+        self.tables.clone()
+    }
+
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
     }

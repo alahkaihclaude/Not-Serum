@@ -3,7 +3,7 @@ members = ["xtask"]
 
 [package]
 name = "morphwave"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 license = "LicenseRef-Proprietary"
 publish = false
@@ -14,6 +14,7 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 # default-features = false drops the `vst3` feature, which pulls in GPLv3 vst3-sys (see README "Licensing").
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683", default-features = false, features = ["assert_process_allocs"] }
+nih_plug_egui = { path = "vendor/nih_plug_egui" }  # vendored with a resize fix, see vendor/nih_plug_egui/PATCHES.md
 realfft = "3"
 
 [profile.release]
@@ -22,3 +23,5 @@ strip = "symbols"
 
 [dev-dependencies]
 hound = "3"
+# dev-only: `cargo run --example standalone` opens the GUI without a DAW (not shipped)
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683", default-features = false, features = ["standalone"] }

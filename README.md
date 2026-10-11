@@ -2,7 +2,14 @@
 
 A wavetable synthesizer plugin written in Rust with [nih-plug](https://github.com/robbert-vdh/nih-plug), for FL Studio on Windows x64.
 
-Status: **Phase 1, core synth.** There's no custom GUI yet. FL Studio shows its generic knob panel instead (click the plugin's wrench icon, or open the plugin window).
+Status: **Phase 2, custom GUI.**
+
+## Using the GUI
+
+- **Knobs:** drag up or down to change the value. Hold **Shift** for fine adjustment. **Double-click** resets to the default. The value shows while you hover or drag.
+- **◀ ▶ selectors** step through wavetables, filter types, sub shapes and voice modes. **FILTER / ON** pills are switches.
+- **Size:** click **75% to 200%** at the top right, or drag the bottom-right corner.
+- Every control goes through the host's parameter system, so FL Studio automation, undo and "link to controller" all work.
 
 ## What's in it
 
@@ -35,12 +42,18 @@ The plugin may be sold closed-source later, so every dependency that ships in th
 | nih-plug `vst3` feature → `vst3-sys` (robbert-vdh fork, branch `fix/drop-box-from-raw`) | **GPLv3** | **No** |
 | CLAP bindings (`clap-sys`, used by nih-plug) | MIT / Apache-2.0 | Yes |
 | nih_plug_xtask (build tool only, not shipped) | ISC | Yes |
+| nih_plug_egui (copied into `vendor/` with a resize fix) | ISC | Yes |
+| egui, egui-baseview, baseview | MIT / Apache-2.0 | Yes |
+| egui's built-in fonts (`epaint_default_fonts`) | OFL-1.1, Ubuntu Font Licence 1.0 | Yes. Approved 2026-10-10. Font license texts must ship with the product (see `THIRD_PARTY.md`) |
+| `clipboard-win`, `error-code` (egui clipboard) | BSL-1.0 | Yes. Approved 2026-10-10 |
+| `realfft` / `rustfft` | MIT / Apache-2.0 | Yes |
+| `hound` (offline renderer only, not shipped yet) | Apache-2.0 | Yes |
 
 **Result: CLAP only for now.** nih-plug is built with `default-features = false`, which turns off the `vst3` feature, so no GPL code goes into the binary. FL Studio loads CLAP plugins.
 
 **Open item before any sale: VST3.** Steinberg moved the VST3 SDK to the MIT license with VST 3.8 (October 2025), but nih-plug still uses the GPLv3 `vst3-sys` bindings. Options: wait for nih-plug to move to permissive bindings (for example the `vst3` crate from coupler-rs), or patch that in ourselves.
 
-These will be checked when they are added in later phases: egui and nih_plug_egui (MIT / Apache-2.0 expected), baseview (MIT / Apache-2.0 expected), `realfft` / `rustfft` (MIT / Apache-2.0 expected), `hound` (Apache-2.0 expected), and `rfd` (MIT expected).
+To audit the whole shipped dependency tree again, run `cargo metadata` and check each crate's `license` field. This was last done in Phase 2: every other crate is MIT, Apache-2.0, ISC, BSD or Zlib. `rfd` (Phase 3) has not been checked yet.
 
 ## Known issues
 
