@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           mkdir renders
-          for p in init supersaw pluck bass pad; do cargo run -q --release --example render -- $p renders/$p.wav; done
+          for p in init supersaw pluck bass pad wobble; do cargo run -q --release --example render -- $p renders/$p.wav; done
           cargo run -q --release --example render -- bench
 
       - uses: actions/upload-artifact@v4

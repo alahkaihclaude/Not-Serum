@@ -1,4 +1,5 @@
 use nih_plug::prelude::*;
+use nih_plug::wrapper::state::ParamValue;
 use std::sync::Arc;
 
 pub mod dsp;
@@ -8,7 +9,7 @@ pub mod voice;
 pub mod wavetable_import;
 
 use params::MorphwaveParams;
-use voice::{Patch, Synth, BLOCK};
+use voice::{Patch, Synth, Transport, BLOCK};
 use wavetable_import::TableSlot;
 
 pub struct Morphwave {
@@ -51,6 +52,20 @@ impl Plugin for Morphwave {
     type SysExMessage = ();
     type BackgroundTask = ();
 
+    /// Migrates state saved by older versions before it's applied.
+    fn filter_state(state: &mut PluginState) {
+        // Before v0.5 there was no mod matrix and "Env 2 > Cutoff" (filt_env) was a fixed knob.
+        // Move it into slot 1 (Env 2 -> Cutoff, same 8-octave scale) so old projects sound the same.
+        if !state.params.contains_key("amt_1") {
+            if let Some(ParamValue::F32(amount)) = state.params.get("filt_env").cloned() {
+                state.params.insert("src_1".into(), ParamValue::String("env2".into()));
+                state.params.insert("dst_1".into(), ParamValue::String("cutoff".into()));
+                state.params.insert("amt_1".into(), ParamValue::F32(amount));
+                state.params.insert("filt_env".into(), ParamValue::F32(0.0));
+            }
+        }
+    }
+
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
     }
@@ -92,6 +107,17 @@ impl Plugin for Morphwave {
             }
         }
 
+        let t = context.transport();
+        let beats_per_bar = match (t.time_sig_numerator, t.time_sig_denominator) {
+            (Some(num), Some(den)) if num > 0 && den > 0 => num as f32 * 4.0 / den as f32,
+            _ => 4.0,
+        };
+        self.synth.set_transport(Transport {
+            tempo: t.tempo.unwrap_or(120.0) as f32,
+            beats_per_bar,
+            pos_beats: if t.playing { t.pos_beats() } else { None },
+        });
+
         let num_samples = buffer.samples();
         let (left, right) = buffer.as_slice().split_at_mut(1);
         let (left, right) = (&mut *left[0], &mut *right[0]);
@@ -108,6 +134,9 @@ impl Plugin for Morphwave {
                     NoteEvent::NoteOff { note, .. } => self.synth.note_off(&self.patch, note),
                     NoteEvent::Choke { note, .. } => self.synth.choke(note),
                     NoteEvent::MidiPitchBend { value, .. } => self.synth.pitch_bend(value * 2.0 - 1.0),
+                    NoteEvent::MidiCC { cc: 1, value, .. } => self.synth.mod_wheel(value),
+                    NoteEvent::MidiChannelPressure { pressure, .. } => self.synth.channel_pressure(pressure),
+                    NoteEvent::PolyPressure { note, pressure, .. } => self.synth.poly_pressure(note, pressure),
                     _ => (),
                 }
                 next_event = context.next_event();
@@ -139,3 +168,35 @@ impl ClapPlugin for Morphwave {
 }
 
 nih_export_clap!(Morphwave);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn state(params: &[(&str, ParamValue)]) -> PluginState {
+        PluginState {
+            version: "0.4.0".into(),
+            params: params.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+            fields: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn old_env2_cutoff_knob_moves_into_mod_slot_1() {
+        let mut s = state(&[("filt_env", ParamValue::F32(0.4))]);
+        Morphwave::filter_state(&mut s);
+        assert!(matches!(s.params["src_1"], ParamValue::String(ref id) if id == "env2"));
+        assert!(matches!(s.params["dst_1"], ParamValue::String(ref id) if id == "cutoff"));
+        assert!(matches!(s.params["amt_1"], ParamValue::F32(a) if a == 0.4));
+        assert!(matches!(s.params["filt_env"], ParamValue::F32(a) if a == 0.0));
+    }
+
+    #[test]
+    fn new_state_is_left_alone() {
+        let mut s = state(&[("filt_env", ParamValue::F32(0.0)), ("amt_1", ParamValue::F32(-0.3))]);
+        Morphwave::filter_state(&mut s);
+        assert!(matches!(s.params["amt_1"], ParamValue::F32(a) if a == -0.3));
+        assert!(!s.params.contains_key("src_1"));
+    }
+}

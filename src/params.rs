@@ -1,7 +1,9 @@
 //! Host-visible parameters. IDs are permanent: never rename or remove one once shipped, only add.
 
 use crate::dsp::filter::FilterMode;
-use crate::voice::{EnvPatch, OscPatch, Patch, VoiceMode};
+use crate::dsp::lfo::LfoShape;
+use crate::dsp::modmatrix::{Dest, ModSlot, Source};
+use crate::voice::{EnvPatch, LfoPatch, OscPatch, Patch, VoiceMode};
 use crate::wavetable_import::StoredTable;
 use nih_plug::prelude::*;
 use std::sync::Arc;
@@ -204,6 +206,279 @@ impl EnvParams {
     }
 }
 
+#[derive(Enum, PartialEq, Clone, Copy)]
+pub enum LfoShapeParam {
+    #[id = "sine"]
+    Sine,
+    #[id = "tri"]
+    Triangle,
+    #[id = "saw"]
+    Saw,
+    #[id = "square"]
+    Square,
+    #[id = "sh"]
+    #[name = "S&H"]
+    SampleHold,
+}
+
+/// Same order as `dsp::lfo::DIVISIONS`.
+#[derive(Enum, PartialEq, Clone, Copy)]
+pub enum Division {
+    #[id = "1/32"]
+    #[name = "1/32"]
+    D32,
+    #[id = "1/16t"]
+    #[name = "1/16T"]
+    D16T,
+    #[id = "1/16"]
+    #[name = "1/16"]
+    D16,
+    #[id = "1/16d"]
+    #[name = "1/16D"]
+    D16D,
+    #[id = "1/8t"]
+    #[name = "1/8T"]
+    D8T,
+    #[id = "1/8"]
+    #[name = "1/8"]
+    D8,
+    #[id = "1/8d"]
+    #[name = "1/8D"]
+    D8D,
+    #[id = "1/4t"]
+    #[name = "1/4T"]
+    D4T,
+    #[id = "1/4"]
+    #[name = "1/4"]
+    D4,
+    #[id = "1/4d"]
+    #[name = "1/4D"]
+    D4D,
+    #[id = "1/2"]
+    #[name = "1/2"]
+    D2,
+    #[id = "1bar"]
+    #[name = "1 bar"]
+    Bar1,
+    #[id = "2bar"]
+    #[name = "2 bars"]
+    Bar2,
+    #[id = "4bar"]
+    #[name = "4 bars"]
+    Bar4,
+    #[id = "8bar"]
+    #[name = "8 bars"]
+    Bar8,
+}
+
+/// Same order as `dsp::modmatrix::Source::ALL`.
+#[derive(Enum, PartialEq, Clone, Copy)]
+pub enum ModSource {
+    #[id = "none"]
+    #[name = "-"]
+    None,
+    #[id = "env1"]
+    #[name = "Env 1"]
+    Env1,
+    #[id = "env2"]
+    #[name = "Env 2"]
+    Env2,
+    #[id = "env3"]
+    #[name = "Env 3"]
+    Env3,
+    #[id = "lfo1"]
+    #[name = "LFO 1"]
+    Lfo1,
+    #[id = "lfo2"]
+    #[name = "LFO 2"]
+    Lfo2,
+    #[id = "lfo3"]
+    #[name = "LFO 3"]
+    Lfo3,
+    #[id = "lfo4"]
+    #[name = "LFO 4"]
+    Lfo4,
+    #[id = "velocity"]
+    Velocity,
+    #[id = "modwheel"]
+    #[name = "Mod Wheel"]
+    ModWheel,
+    #[id = "aftertouch"]
+    Aftertouch,
+    #[id = "note"]
+    Note,
+    #[id = "macro1"]
+    #[name = "Macro 1"]
+    Macro1,
+    #[id = "macro2"]
+    #[name = "Macro 2"]
+    Macro2,
+    #[id = "macro3"]
+    #[name = "Macro 3"]
+    Macro3,
+    #[id = "macro4"]
+    #[name = "Macro 4"]
+    Macro4,
+}
+
+/// Same order as `dsp::modmatrix::Dest::ALL`. Only append new destinations.
+#[derive(Enum, PartialEq, Clone, Copy)]
+pub enum ModDest {
+    #[id = "none"]
+    #[name = "-"]
+    None,
+    #[id = "a_pos"]
+    #[name = "A Position"]
+    APosition,
+    #[id = "a_level"]
+    #[name = "A Level"]
+    ALevel,
+    #[id = "a_pan"]
+    #[name = "A Pan"]
+    APan,
+    #[id = "a_pitch"]
+    #[name = "A Pitch"]
+    APitch,
+    #[id = "a_detune"]
+    #[name = "A Detune"]
+    ADetune,
+    #[id = "a_blend"]
+    #[name = "A Blend"]
+    ABlend,
+    #[id = "a_width"]
+    #[name = "A Width"]
+    AWidth,
+    #[id = "b_pos"]
+    #[name = "B Position"]
+    BPosition,
+    #[id = "b_level"]
+    #[name = "B Level"]
+    BLevel,
+    #[id = "b_pan"]
+    #[name = "B Pan"]
+    BPan,
+    #[id = "b_pitch"]
+    #[name = "B Pitch"]
+    BPitch,
+    #[id = "b_detune"]
+    #[name = "B Detune"]
+    BDetune,
+    #[id = "b_blend"]
+    #[name = "B Blend"]
+    BBlend,
+    #[id = "b_width"]
+    #[name = "B Width"]
+    BWidth,
+    #[id = "pitch"]
+    #[name = "Pitch (all)"]
+    Pitch,
+    #[id = "sub_level"]
+    #[name = "Sub Level"]
+    SubLevel,
+    #[id = "noise_level"]
+    #[name = "Noise Level"]
+    NoiseLevel,
+    #[id = "cutoff"]
+    Cutoff,
+    #[id = "res"]
+    Resonance,
+    #[id = "drive"]
+    Drive,
+    #[id = "volume"]
+    Volume,
+    #[id = "lfo1_rate"]
+    #[name = "LFO 1 Rate"]
+    Lfo1Rate,
+    #[id = "lfo2_rate"]
+    #[name = "LFO 2 Rate"]
+    Lfo2Rate,
+    #[id = "lfo3_rate"]
+    #[name = "LFO 3 Rate"]
+    Lfo3Rate,
+    #[id = "lfo4_rate"]
+    #[name = "LFO 4 Rate"]
+    Lfo4Rate,
+}
+
+#[derive(Params)]
+pub struct LfoParams {
+    #[id = "shape"]
+    pub shape: EnumParam<LfoShapeParam>,
+    #[id = "sync"]
+    pub sync: BoolParam,
+    #[id = "rate"]
+    pub rate: FloatParam,
+    #[id = "div"]
+    pub division: EnumParam<Division>,
+    #[id = "retrig"]
+    pub retrigger: BoolParam,
+    #[id = "phase"]
+    pub phase: FloatParam,
+}
+
+impl LfoParams {
+    fn new(name: &str, d: &LfoPatch) -> Self {
+        Self {
+            shape: EnumParam::new(format!("{name} Shape"), LfoShapeParam::Sine),
+            sync: BoolParam::new(format!("{name} Sync"), d.sync),
+            rate: FloatParam::new(
+                format!("{name} Rate"),
+                d.rate_hz,
+                FloatRange::Skewed { min: 0.01, max: 40.0, factor: FloatRange::skew_factor(-2.0) },
+            )
+            .with_unit(" Hz")
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
+            division: EnumParam::new(format!("{name} Division"), Division::D4),
+            retrigger: BoolParam::new(format!("{name} Retrigger"), d.retrigger),
+            phase: percent(format!("{name} Phase"), d.phase, 0.0),
+        }
+    }
+
+    fn patch(&self) -> LfoPatch {
+        LfoPatch {
+            shape: LfoShape::ALL[self.shape.value().to_index()],
+            sync: self.sync.value(),
+            rate_hz: self.rate.value(),
+            division: self.division.value().to_index(),
+            retrigger: self.retrigger.value(),
+            phase: self.phase.value(),
+        }
+    }
+}
+
+#[derive(Params)]
+pub struct SlotParams {
+    #[id = "src"]
+    pub source: EnumParam<ModSource>,
+    #[id = "dst"]
+    pub dest: EnumParam<ModDest>,
+    #[id = "amt"]
+    pub amount: FloatParam,
+    #[id = "curve"]
+    pub curve: FloatParam,
+}
+
+impl SlotParams {
+    fn new(i: usize, d: &ModSlot) -> Self {
+        let n = i + 1;
+        Self {
+            source: EnumParam::new(format!("Mod {n} Source"), ModSource::from_index(d.source as usize)),
+            dest: EnumParam::new(format!("Mod {n} Destination"), ModDest::from_index(d.dest as usize)),
+            amount: percent(format!("Mod {n} Amount"), d.amount, -1.0),
+            curve: percent(format!("Mod {n} Curve"), d.curve, -1.0),
+        }
+    }
+
+    fn patch(&self, n: u32) -> ModSlot {
+        ModSlot {
+            source: Source::ALL[self.source.value().to_index()],
+            dest: Dest::ALL[self.dest.value().to_index()],
+            amount: self.amount.smoothed.next_step(n),
+            curve: self.curve.value(),
+        }
+    }
+}
+
 #[derive(Params)]
 pub struct MorphwaveParams {
     /// GUI window size. Persist keys are permanent too.
@@ -241,6 +516,8 @@ pub struct MorphwaveParams {
     pub drive: FloatParam,
     #[id = "filt_key"]
     pub keytrack: FloatParam,
+    /// Retired in v0.5 (Phase 4): Env 2 > Cutoff is now mod slot 1. Kept hidden so old projects load;
+    /// `Morphwave::filter_state` moves its value into the matrix.
     #[id = "filt_env"]
     pub env2_amount: FloatParam,
 
@@ -248,6 +525,30 @@ pub struct MorphwaveParams {
     pub env1: EnvParams,
     #[nested(id_prefix = "env2", group = "Env 2")]
     pub env2: EnvParams,
+    #[nested(id_prefix = "env3", group = "Env 3")]
+    pub env3: EnvParams,
+
+    #[nested(id_prefix = "lfo1", group = "LFO 1")]
+    pub lfo1: LfoParams,
+    #[nested(id_prefix = "lfo2", group = "LFO 2")]
+    pub lfo2: LfoParams,
+    #[nested(id_prefix = "lfo3", group = "LFO 3")]
+    pub lfo3: LfoParams,
+    #[nested(id_prefix = "lfo4", group = "LFO 4")]
+    pub lfo4: LfoParams,
+
+    #[id = "macro1"]
+    pub macro1: FloatParam,
+    #[id = "macro2"]
+    pub macro2: FloatParam,
+    #[id = "macro3"]
+    pub macro3: FloatParam,
+    #[id = "macro4"]
+    pub macro4: FloatParam,
+
+    /// Mod matrix. Param IDs are `src_1`, `dst_1`, `amt_1`, `curve_1` ... `_16`.
+    #[nested(array, group = "Mod")]
+    pub mods: [SlotParams; 16],
 
     #[id = "voice_mode"]
     pub voice_mode: EnumParam<Mode>,
@@ -290,10 +591,20 @@ impl Default for MorphwaveParams {
             resonance: percent("Resonance".into(), d.resonance, 0.0),
             drive: percent("Drive".into(), d.drive, 0.0),
             keytrack: percent("Key Track".into(), d.keytrack, 0.0),
-            env2_amount: percent("Env 2 > Cutoff".into(), d.env2_amount, -1.0),
+            env2_amount: percent("Env 2 > Cutoff (old)".into(), 0.0, -1.0).hide(),
 
             env1: EnvParams::new("Env 1", &d.env[0]),
             env2: EnvParams::new("Env 2", &d.env[1]),
+            env3: EnvParams::new("Env 3", &d.env[2]),
+            lfo1: LfoParams::new("LFO 1", &d.lfo[0]),
+            lfo2: LfoParams::new("LFO 2", &d.lfo[1]),
+            lfo3: LfoParams::new("LFO 3", &d.lfo[2]),
+            lfo4: LfoParams::new("LFO 4", &d.lfo[3]),
+            macro1: percent("Macro 1".into(), d.macros[0], 0.0),
+            macro2: percent("Macro 2".into(), d.macros[1], 0.0),
+            macro3: percent("Macro 3".into(), d.macros[2], 0.0),
+            macro4: percent("Macro 4".into(), d.macros[3], 0.0),
+            mods: std::array::from_fn(|i| SlotParams::new(i, &d.mods[i])),
 
             voice_mode: EnumParam::new("Voice Mode", Mode::Poly),
             glide: seconds("Glide".into(), d.glide, 5.0),
@@ -334,12 +645,48 @@ impl MorphwaveParams {
             resonance: self.resonance.smoothed.next_step(n),
             drive: self.drive.smoothed.next_step(n),
             keytrack: self.keytrack.smoothed.next_step(n),
-            env2_amount: self.env2_amount.smoothed.next_step(n),
-            env: [self.env1.patch(n), self.env2.patch(n)],
+            env: [self.env1.patch(n), self.env2.patch(n), self.env3.patch(n)],
+            lfo: [self.lfo1.patch(), self.lfo2.patch(), self.lfo3.patch(), self.lfo4.patch()],
+            macros: [
+                self.macro1.smoothed.next_step(n),
+                self.macro2.smoothed.next_step(n),
+                self.macro3.smoothed.next_step(n),
+                self.macro4.smoothed.next_step(n),
+            ],
+            mods: std::array::from_fn(|i| self.mods[i].patch(n)),
             voice_mode: VoiceMode::ALL[self.voice_mode.value().to_index()],
             glide: self.glide.value(),
             bend_range: self.bend_range.value() as f32,
             master: self.master.smoothed.next_step(n),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsp::lfo::DIVISIONS;
+    use crate::voice::VoiceMode;
+
+    /// Host enums are mapped onto DSP lists by index, so their lengths must match.
+    #[test]
+    fn host_enums_match_dsp_lists() {
+        assert_eq!(ModSource::variants().len(), Source::ALL.len());
+        assert_eq!(ModDest::variants().len(), Dest::ALL.len());
+        assert_eq!(Division::variants().len(), DIVISIONS.len());
+        assert_eq!(LfoShapeParam::variants().len(), LfoShape::ALL.len());
+        assert_eq!(FilterType::variants().len(), FilterMode::ALL.len());
+        assert_eq!(Mode::variants().len(), VoiceMode::ALL.len());
+        assert_eq!(Table::variants().len(), crate::dsp::wavetable::builtin().len() + 1); // + Custom
+    }
+
+    #[test]
+    fn default_params_rebuild_the_default_patch() {
+        let p = MorphwaveParams::default().patch(1);
+        let d = Patch::default();
+        assert_eq!(p.mods[0].source, Source::Env2);
+        assert_eq!(p.mods[0].dest, Dest::Cutoff);
+        assert_eq!(p.lfo[0].division, d.lfo[0].division);
+        assert_eq!(p.env.len(), 3);
     }
 }

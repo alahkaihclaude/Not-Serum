@@ -16,6 +16,8 @@ pub mod palette {
     pub const TEXT: Color32 = Color32::from_rgb(0xed, 0xe6, 0xda);
     pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8f, 0x86, 0x96);
     pub const TRACK: Color32 = Color32::from_rgb(0x3d, 0x35, 0x47);
+    /// Modulation (rings, matrix): teal against the amber accent.
+    pub const MOD: Color32 = Color32::from_rgb(0x5f, 0xd4, 0xc4);
 }
 use palette::*;
 
@@ -57,13 +59,11 @@ fn arc(center: Pos2, radius: f32, from: f32, to: f32) -> Vec<Pos2> {
         .collect()
 }
 
-/// Rotary knob: drag vertically (Shift for fine), double-click to reset. Shows the value while hovered or dragged.
-pub fn knob<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &P, center: Pos2, label: &str) {
-    let radius = 15.0 * l.s;
-    let rect = Rect::from_center_size(center + vec2(0.0, 6.0 * l.s), vec2(48.0, 52.0) * l.s);
+/// Shared drag behaviour: drag (Shift for fine) changes the value, double-click resets it.
+/// `vertical` picks the drag axis (up / right increases).
+fn drag_param<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &P, rect: Rect, vertical: bool) -> egui::Response {
     let id = ui.id().with(param.name());
     let resp = ui.interact(rect, id, Sense::click_and_drag());
-
     if resp.double_clicked() {
         setter.begin_set_parameter(param);
         setter.set_parameter_normalized(param, param.default_normalized_value());
@@ -75,23 +75,52 @@ pub fn knob<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &P, 
     if resp.dragged() {
         let fine = ui.input(|i| i.modifiers.shift);
         let per_px = if fine { 0.0005 } else { 0.005 };
+        let delta = if vertical { -resp.drag_delta().y } else { resp.drag_delta().x };
         // accumulate unquantized so stepped (int/enum) params still move with slow drags
-        let v = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(0.0) - resp.drag_delta().y / l.s * per_px;
-        let v = v.clamp(0.0, 1.0);
+        let v = (ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(0.0) + delta / l.s * per_px).clamp(0.0, 1.0);
         ui.data_mut(|d| d.insert_temp(id, v));
         setter.set_parameter_normalized(param, v);
     }
     if resp.drag_stopped() {
         setter.end_set_parameter(param);
     }
+    resp
+}
+
+/// Bipolar params (centered default, e.g. pan) light up from the middle.
+fn fill_origin<P: Param>(param: &P) -> f32 {
+    if (param.default_normalized_value() - 0.5).abs() < 1e-3 {
+        0.5
+    } else {
+        0.0
+    }
+}
+
+/// Rotary knob: drag vertically (Shift for fine), double-click to reset. Shows the value while hovered or dragged.
+pub fn knob<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &P, center: Pos2, label: &str) {
+    knob_mod(ui, l, setter, param, center, label, 0.0);
+}
+
+/// Knob with a modulation ring: `modulation` is the summed mod-matrix amount aimed at this knob
+/// (1.0 = the knob's full range), drawn as a teal arc outside the knob.
+pub fn knob_mod<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &P, center: Pos2, label: &str, modulation: f32) {
+    let radius = 15.0 * l.s;
+    let rect = Rect::from_center_size(center + vec2(0.0, 6.0 * l.s), vec2(48.0, 52.0) * l.s);
+    let resp = drag_param(ui, l, setter, param, rect, true);
 
     let value = param.unmodulated_normalized_value();
     let (start, sweep) = (0.75 * PI, 1.5 * PI);
     let p = ui.painter();
     let stroke_w = 3.5 * l.s;
     p.add(Shape::line(arc(center, radius, start, start + sweep), Stroke::new(stroke_w, TRACK)));
-    // bipolar params (centered default, e.g. pan) light up from 12 o'clock
-    let from = if (param.default_normalized_value() - 0.5).abs() < 1e-3 { 0.5 } else { 0.0 };
+    if modulation.abs() > 0.001 {
+        let end = (value + modulation).clamp(0.0, 1.0);
+        p.add(Shape::line(
+            arc(center, radius + 4.5 * l.s, start + sweep * value.min(end), start + sweep * value.max(end)),
+            Stroke::new(2.0 * l.s, MOD),
+        ));
+    }
+    let from = fill_origin(param);
     if (value - from).abs() > 0.001 {
         p.add(Shape::line(
             arc(center, radius, start + sweep * from.min(value), start + sweep * from.max(value)),
@@ -110,6 +139,20 @@ pub fn knob<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &P, 
     } else {
         p.text(text_pos, Align2::CENTER_TOP, label, l.font(10.5), TEXT_DIM);
     }
+}
+
+/// Horizontal bar slider (mod amounts): drag sideways, Shift for fine, double-click to reset.
+pub fn slider<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &P, rect: Rect) {
+    let resp = drag_param(ui, l, setter, param, rect, false);
+    let value = param.unmodulated_normalized_value();
+    let from = fill_origin(param);
+    let p = ui.painter();
+    p.rect_filled(rect, 3.0 * l.s, SCREEN);
+    let x = |v: f32| rect.left() + v * rect.width();
+    let fill = Rect::from_x_y_ranges(x(from.min(value))..=x(from.max(value)), rect.y_range());
+    p.rect_filled(fill, 3.0 * l.s, if value == from { TRACK } else { ACCENT.gamma_multiply(0.75) });
+    let color = if resp.hovered() || resp.dragged() { TEXT } else { TEXT_DIM };
+    p.text(rect.center(), Align2::CENTER_CENTER, param.normalized_value_to_string(value, true), l.mono(10.0), color);
 }
 
 /// Small on/off pill.
@@ -144,9 +187,53 @@ pub fn stepper<P: Param>(ui: &mut Ui, l: &Layout, setter: &ParamSetter, param: &
         let color = if resp.hovered() { ACCENT } else { TEXT_DIM };
         ui.painter().text(r.center(), Align2::CENTER_CENTER, glyph, l.font(9.0), color);
     }
+    // clicking the name opens a list of every option
+    let name_rect = Rect::from_x_y_ranges(left.right()..=right.left(), rect.y_range());
+    let name_resp = ui.interact(name_rect, id.with("name"), Sense::click());
+    let popup = id.with("popup");
+    let mut open = ui.data(|d| d.get_temp::<bool>(popup)).unwrap_or(false);
+    if name_resp.clicked() {
+        open = !open;
+    }
     let p = ui.painter();
-    p.rect_stroke(rect, 3.0 * l.s, Stroke::new(1.0_f32, PANEL_EDGE), StrokeKind::Inside);
+    p.rect_stroke(rect, 3.0 * l.s, Stroke::new(1.0_f32, if open || name_resp.hovered() { ACCENT } else { PANEL_EDGE }), StrokeKind::Inside);
     p.text(rect.center(), Align2::CENTER_CENTER, param.normalized_value_to_string(value, true), l.font(11.0), TEXT);
+
+    if open {
+        let n = param.step_count().unwrap_or(1) + 1;
+        let row_h = 18.0 * l.s;
+        let size = vec2(rect.width().max(130.0 * l.s), row_h * n as f32);
+        let screen = ui.ctx().screen_rect();
+        let mut pos = rect.left_bottom();
+        pos.y = pos.y.min(screen.bottom() - size.y).max(screen.top());
+        pos.x = pos.x.min(screen.right() - size.x);
+        let area = egui::Area::new(popup).order(egui::Order::Foreground).fixed_pos(pos).show(ui.ctx(), |ui| {
+            let (list, _) = ui.allocate_exact_size(size, Sense::hover());
+            ui.painter().rect_filled(list, 4.0 * l.s, PANEL);
+            ui.painter().rect_stroke(list, 4.0 * l.s, Stroke::new(1.0_f32, ACCENT), StrokeKind::Inside);
+            for i in 0..n {
+                let v = if n > 1 { i as f32 / (n - 1) as f32 } else { 0.0 };
+                let row = Rect::from_min_size(list.min + vec2(0.0, row_h * i as f32), vec2(size.x, row_h));
+                let resp = ui.interact(row, popup.with(i), Sense::click());
+                let selected = (v - value).abs() < 1e-4;
+                if resp.hovered() {
+                    ui.painter().rect_filled(row.shrink(1.0), 3.0 * l.s, TRACK);
+                }
+                let color = if selected { ACCENT } else { TEXT };
+                ui.painter().text(row.left_center() + vec2(8.0 * l.s, 0.0), Align2::LEFT_CENTER, param.normalized_value_to_string(v, true), l.font(10.5), color);
+                if resp.clicked() {
+                    setter.begin_set_parameter(param);
+                    setter.set_parameter_normalized(param, v);
+                    setter.end_set_parameter(param);
+                    open = false;
+                }
+            }
+        });
+        if !name_resp.clicked() && area.response.clicked_elsewhere() {
+            open = false;
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(popup, open));
 }
 
 /// Current frame up front, the other frames stacked behind it in a faint 3D-ish fan.
@@ -233,4 +320,23 @@ pub fn filter_view(ui: &Ui, l: &Layout, rect: Rect, on: bool, mode: usize, cutof
         })
         .collect();
     p.add(Shape::line(pts, Stroke::new(2.0 * l.s, if on { ACCENT } else { TRACK })));
+}
+
+/// One cycle of an LFO shape, starting at its phase offset. S&H shows a fixed example pattern.
+pub fn lfo_view(ui: &Ui, l: &Layout, rect: Rect, shape: crate::dsp::lfo::LfoShape, phase: f32) {
+    use crate::dsp::lfo::{LfoShape, LfoState};
+    let p = ui.painter().with_clip_rect(rect);
+    p.rect_filled(rect, 4.0 * l.s, SCREEN);
+    let inner = rect.shrink(6.0 * l.s);
+    p.line_segment([pos2(inner.left(), inner.center().y), pos2(inner.right(), inner.center().y)], Stroke::new(1.0_f32, TRACK));
+    const STEPS: [f32; 8] = [0.6, -0.3, 0.9, -0.8, 0.1, 0.7, -0.6, -0.1];
+    let pts: Vec<Pos2> = (0..=96)
+        .map(|i| {
+            let u = i as f32 / 96.0;
+            let state = LfoState { phase: (u + phase).fract(), held: STEPS[((u * 8.0) as usize).min(7)] };
+            let v = if shape == LfoShape::SampleHold { state.held } else { state.value(shape) };
+            pos2(inner.left() + u * inner.width(), inner.center().y - v * inner.height() * 0.45)
+        })
+        .collect();
+    p.add(Shape::line(pts, Stroke::new(2.0 * l.s, MOD)));
 }

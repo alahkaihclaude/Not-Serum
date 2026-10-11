@@ -2,6 +2,8 @@
 
 pub mod env;
 pub mod filter;
+pub mod lfo;
+pub mod modmatrix;
 pub mod osc;
 pub mod wavetable;
 

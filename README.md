@@ -2,13 +2,32 @@
 
 A wavetable synthesizer plugin written in Rust with [nih-plug](https://github.com/robbert-vdh/nih-plug), for FL Studio on Windows x64.
 
-Status: **Phase 3, wavetable import.**
+Status: **Phase 4, LFOs and mod matrix.**
 
 ## Using the GUI
 
 - **Knobs:** drag up or down to change the value. Hold **Shift** for fine adjustment. **Double-click** resets to the default. The value shows while you hover or drag.
 - **◀ ▶ selectors** step through wavetables, filter types, sub shapes and voice modes. **FILTER / ON** pills are switches.
 - **Size:** click **75% to 200%** at the top right, or drag the bottom-right corner.
+
+## Modulation (MOD page)
+
+Click **MOD** at the top to switch pages.
+
+- **LFO 1–4:** sine, triangle, saw, square and S&H shapes.
+  - **SYNC** locks the rate to FL Studio's tempo, from 1/32 to 8 bars, including triplets (T) and dotted (D).
+  - **RETRIG** restarts the LFO at its Phase on every note. Turn it off for one free-running LFO shared by all notes. With SYNC also on, it locks to the song position while FL Studio plays.
+- **Env 3** and **Macro 1–4** are extra sources. Macros are host parameters, so you can link them to MIDI controllers in FL Studio.
+- **Mod matrix:** 16 slots, each with a source, a destination, an amount (−100% to +100%) and a curve.
+  - Sources: Env 1–3, LFO 1–4, Velocity, Mod Wheel, Aftertouch (channel or polyphonic), Note and Macro 1–4.
+  - Destinations: oscillator position, level, pan, pitch, detune, blend and width (per osc), Pitch (all), sub and noise level, cutoff, resonance, drive, volume, and LFO rates.
+  - At 100%: pitch moves ±24 semitones, cutoff ±8 octaves, LFO rate ±4 octaves, and everything else across its full range.
+- Click a selector's name to pick from a list, or use ◀ ▶.
+- Modulation runs per voice and never moves the knob itself. A **teal ring** around a knob on the SYNTH page shows how far it's being modulated.
+- **Example, wobble bass:** set LFO 1 to SYNC at 1/8. In slot 2 pick LFO 1 → Cutoff at about 40%, and in slot 3 LFO 1 → A Position. Turn the filter on.
+- **Example, 808 punch:** set Env 3 to Attack 0, Decay about 80 ms, Sustain 0. Add a slot with Env 3 → Pitch (all) at about 50% (+12 semitones).
+
+**Older projects:** the Phase 1 "Env 2 > Cutoff" knob is gone. When an older project loads, its value moves into mod slot 1 automatically, so it sounds the same. Automation clips that targeted that old knob no longer do anything.
 
 ## Custom wavetables
 
@@ -23,8 +42,8 @@ Status: **Phase 3, wavetable import.**
 
 - **Osc A / Osc B.** Wavetable oscillators with 4 built-in tables (Basic Shapes, which morphs sine → triangle → saw → square, plus PWM Sweep, Formant Sweep and Harmonic Build). Each has position, level, pan, octave/semi/fine, unison 1–16 with detune, blend and width, start phase and random phase. Osc B starts at level 0.
 - **Sub** (sine/triangle/saw/square, octave) and **Noise**.
-- **Filter.** LP/HP/BP at 12 or 24 dB, with cutoff, resonance, drive and key tracking. "Env 2 > Cutoff" sets how far Env 2 moves the cutoff. Each source has a "To Filter" switch; when it's off, that source skips the filter.
-- **Env 1** controls volume. **Env 2** controls the filter.
+- **Filter.** LP/HP/BP at 12 or 24 dB, with cutoff, resonance, drive and key tracking. Each source has a "To Filter" switch; when it's off, that source skips the filter.
+- **Env 1** always controls volume. **Env 2** and **Env 3** are free modulation sources. Mod slot 1 comes pre-wired as Env 2 → Cutoff at 0%.
 - **Voices.** 16-voice poly with click-free voice stealing, plus Mono and Legato modes. Glide and pitch-bend range.
 - **Master** volume, followed by an output soft-clip that never goes above 0 dBFS.
 

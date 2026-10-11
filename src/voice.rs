@@ -2,6 +2,8 @@
 
 use crate::dsp::env::Adsr;
 use crate::dsp::filter::{Coefs, Filter, FilterMode};
+use crate::dsp::lfo::{division_beats, LfoShape, LfoState};
+use crate::dsp::modmatrix::{self, Dest, ModSlot, Source, NUM_SOURCES};
 use crate::dsp::osc::{Osc, Unison, UnisonSettings};
 use crate::dsp::wavetable::{self, mip_for, Wavetable};
 use crate::dsp::{midi_to_hz, soft_clip, Rng};
@@ -12,8 +14,6 @@ pub const MAX_VOICES: usize = 16;
 pub const BLOCK: usize = 32;
 /// Fade-out time for a stolen voice before it restarts.
 const STEAL_FADE_S: f32 = 0.003;
-/// Env 2 at 100% amount moves the cutoff this many octaves.
-const ENV_CUTOFF_OCTAVES: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct OscPatch {
@@ -39,6 +39,35 @@ pub struct EnvPatch {
     pub decay: f32,
     pub sustain: f32,
     pub release: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LfoPatch {
+    pub shape: LfoShape,
+    /// Rate follows host tempo (`division`) instead of `rate_hz`.
+    pub sync: bool,
+    pub rate_hz: f32,
+    /// Index into `dsp::lfo::DIVISIONS`.
+    pub division: usize,
+    /// Restart at `phase` on every note; otherwise free-running and shared by all voices.
+    pub retrigger: bool,
+    pub phase: f32,
+}
+
+/// Host tempo and position, set once per process call.
+#[derive(Clone, Copy, Debug)]
+pub struct Transport {
+    pub tempo: f32,
+    /// Quarter notes per bar.
+    pub beats_per_bar: f32,
+    /// Song position in quarter notes while playing.
+    pub pos_beats: Option<f64>,
+}
+
+impl Default for Transport {
+    fn default() -> Self {
+        Self { tempo: 120.0, beats_per_bar: 4.0, pos_beats: None }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,8 +99,10 @@ pub struct Patch {
     pub resonance: f32,
     pub drive: f32,
     pub keytrack: f32,
-    pub env2_amount: f32,
-    pub env: [EnvPatch; 2],
+    pub env: [EnvPatch; 3],
+    pub lfo: [LfoPatch; 4],
+    pub macros: [f32; 4],
+    pub mods: [ModSlot; 16],
     pub voice_mode: VoiceMode,
     pub glide: f32,
     pub bend_range: f32,
@@ -111,11 +142,21 @@ impl Default for Patch {
             resonance: 0.1,
             drive: 0.0,
             keytrack: 0.0,
-            env2_amount: 0.0,
             env: [
                 EnvPatch { attack: 0.002, decay: 1.0, sustain: 1.0, release: 0.2 },
                 EnvPatch { attack: 0.002, decay: 0.5, sustain: 0.0, release: 0.2 },
+                EnvPatch { attack: 0.002, decay: 0.5, sustain: 0.0, release: 0.2 },
             ],
+            lfo: [LfoPatch { shape: LfoShape::Sine, sync: false, rate_hz: 2.0, division: 8, retrigger: true, phase: 0.0 }; 4],
+            macros: [0.0; 4],
+            // Env 2 -> Cutoff is pre-wired at 0 (it replaced the Phase 1 "Env 2 > Cutoff" knob)
+            mods: std::array::from_fn(|i| {
+                if i == 0 {
+                    ModSlot { source: Source::Env2, dest: Dest::Cutoff, ..ModSlot::default() }
+                } else {
+                    ModSlot::default()
+                }
+            }),
             voice_mode: VoiceMode::Poly,
             glide: 0.0,
             bend_range: 2.0,
@@ -138,8 +179,26 @@ struct Voice {
     pending: Option<(u8, f32)>,
     osc: [Osc; 2],
     sub_phase: f32,
-    env: [Adsr; 2],
+    env: [Adsr; 3],
+    /// Per-voice LFOs (used in retrigger mode).
+    lfo: [LfoState; 4],
+    /// Polyphonic aftertouch for this voice's note.
+    pressure: f32,
     filter: Filter,
+}
+
+/// Synth-wide inputs a voice reads for one block.
+struct BlockCtx<'a> {
+    osc_tables: [&'a Wavetable; 2],
+    basic: &'a Wavetable,
+    sr: f32,
+    bend: f32,
+    mod_wheel: f32,
+    channel_pressure: f32,
+    /// Free-running LFOs shared by all voices.
+    global_lfo: [LfoState; 4],
+    /// Unmodulated LFO rates in Hz (tempo sync already applied).
+    lfo_hz: [f32; 4],
 }
 
 pub struct Synth {
@@ -156,6 +215,12 @@ pub struct Synth {
     last_pitch: f32,
     /// Pitch bend in [-1, 1].
     bend: f32,
+    mod_wheel: f32,
+    channel_pressure: f32,
+    global_lfo: [LfoState; 4],
+    transport: Transport,
+    /// Set by `set_transport`; synced free-running LFOs snap to the song position once per process call.
+    snap_lfos: bool,
 }
 
 impl Synth {
@@ -172,6 +237,30 @@ impl Synth {
             held_len: 0,
             last_pitch: 60.0,
             bend: 0.0,
+            mod_wheel: 0.0,
+            channel_pressure: 0.0,
+            global_lfo: [LfoState::default(); 4],
+            transport: Transport::default(),
+            snap_lfos: false,
+        }
+    }
+
+    pub fn set_transport(&mut self, transport: Transport) {
+        self.transport = transport;
+        self.snap_lfos = true;
+    }
+
+    pub fn mod_wheel(&mut self, value: f32) {
+        self.mod_wheel = value.clamp(0.0, 1.0);
+    }
+
+    pub fn channel_pressure(&mut self, value: f32) {
+        self.channel_pressure = value.clamp(0.0, 1.0);
+    }
+
+    pub fn poly_pressure(&mut self, note: u8, value: f32) {
+        for v in self.voices.iter_mut().filter(|v| v.active && v.note == note) {
+            v.pressure = value.clamp(0.0, 1.0);
         }
     }
 
@@ -194,6 +283,8 @@ impl Synth {
         self.voices = [Voice::default(); MAX_VOICES];
         self.held_len = 0;
         self.bend = 0.0;
+        self.mod_wheel = 0.0;
+        self.channel_pressure = 0.0;
     }
 
     pub fn active_voices(&self) -> usize {
@@ -304,6 +395,9 @@ impl Synth {
         for (o, p) in v.osc.iter_mut().zip(&patch.osc) {
             o.reset(p.phase, p.random_phase, &mut self.rng);
         }
+        for (l, p) in v.lfo.iter_mut().zip(&patch.lfo) {
+            l.reset(p.phase, &mut self.rng);
+        }
         v.env.iter_mut().for_each(Adsr::gate_on);
     }
 
@@ -319,16 +413,49 @@ impl Synth {
             Some(t) => t,
             None => custom[i].as_deref().unwrap_or(&tables[0]),
         });
+        let t = self.transport;
+        let lfo_hz: [f32; 4] = std::array::from_fn(|k| {
+            let lfo = &patch.lfo[k];
+            if lfo.sync {
+                t.tempo / 60.0 / division_beats(lfo.division, t.beats_per_bar)
+            } else {
+                lfo.rate_hz
+            }
+        });
+        // free-running synced LFOs lock to the song position while the host plays
+        if std::mem::take(&mut self.snap_lfos) {
+            if let Some(pos) = t.pos_beats {
+                for (g, lfo) in self.global_lfo.iter_mut().zip(&patch.lfo) {
+                    if lfo.sync && !lfo.retrigger {
+                        let cycles = pos / division_beats(lfo.division, t.beats_per_bar) as f64;
+                        g.phase = (cycles as f32 + lfo.phase).rem_euclid(1.0);
+                    }
+                }
+            }
+        }
+
         for (l, r) in left.chunks_mut(BLOCK).zip(right.chunks_mut(BLOCK)) {
+            let ctx = BlockCtx {
+                osc_tables,
+                basic: &tables[0],
+                sr: self.sample_rate,
+                bend: self.bend * patch.bend_range,
+                mod_wheel: self.mod_wheel,
+                channel_pressure: self.channel_pressure,
+                global_lfo: self.global_lfo,
+                lfo_hz,
+            };
             for i in 0..MAX_VOICES {
                 let v = &self.voices[i];
                 if let (Some((note, vel)), true) = (v.pending, v.fade <= 0.0) {
                     self.start(i, patch, note, vel);
                 }
                 if self.voices[i].active {
-                    let bend = self.bend * patch.bend_range;
-                    self.voices[i].render(patch, osc_tables, &tables[0], self.sample_rate, bend, &mut self.rng, l, r);
+                    self.voices[i].render(patch, &ctx, &mut self.rng, l, r);
                 }
+            }
+            for (g, hz) in self.global_lfo.iter_mut().zip(lfo_hz) {
+                g.advance(hz * l.len() as f32 / self.sample_rate, &mut self.rng);
             }
             let gain = patch.master;
             for (l, r) in l.iter_mut().zip(r.iter_mut()) {
@@ -340,21 +467,40 @@ impl Synth {
 }
 
 impl Voice {
-    #[allow(clippy::too_many_arguments)]
-    fn render(
-        &mut self,
-        p: &Patch,
-        osc_tables: [&Wavetable; 2],
-        basic: &Wavetable,
-        sr: f32,
-        bend: f32,
-        rng: &mut Rng,
-        out_l: &mut [f32],
-        out_r: &mut [f32],
-    ) {
-        let n = out_l.len();
+    /// Modulation sources at the start of this block, indexed by `Source as usize`.
+    fn sources(&self, p: &Patch, ctx: &BlockCtx) -> [f32; NUM_SOURCES] {
+        let mut s = [0.0; NUM_SOURCES];
+        for k in 0..3 {
+            s[Source::Env1 as usize + k] = self.env[k].level();
+        }
+        for k in 0..4 {
+            let state = if p.lfo[k].retrigger { &self.lfo[k] } else { &ctx.global_lfo[k] };
+            s[Source::Lfo1 as usize + k] = state.value(p.lfo[k].shape);
+        }
+        s[Source::Velocity as usize] = self.velocity;
+        s[Source::ModWheel as usize] = ctx.mod_wheel;
+        s[Source::Aftertouch as usize] = self.pressure.max(ctx.channel_pressure);
+        s[Source::Note as usize] = ((self.note as f32 - 60.0) / 60.0).clamp(-1.0, 1.0);
+        for k in 0..4 {
+            s[Source::Macro1 as usize + k] = p.macros[k];
+        }
+        s
+    }
+
+    fn render(&mut self, p: &Patch, ctx: &BlockCtx, rng: &mut Rng, out_l: &mut [f32], out_r: &mut [f32]) {
+        let (n, sr) = (out_l.len(), ctx.sr);
         for (e, s) in self.env.iter_mut().zip(&p.env) {
             e.set(s.attack, s.decay, s.sustain, s.release, sr);
+        }
+
+        // shortcut: modulation is control-rate (once per BLOCK), fine for envelopes and LFOs up to ~50 Hz
+        let m = modmatrix::evaluate(&p.mods, &self.sources(p, ctx));
+        let md = |d: Dest| m[d as usize];
+        for k in 0..4 {
+            if p.lfo[k].retrigger {
+                let hz = ctx.lfo_hz[k] * (m[Dest::Lfo1Rate as usize + k] * modmatrix::LFO_RATE_OCTAVES).exp2();
+                self.lfo[k].advance(hz * n as f32 / sr, rng);
+            }
         }
 
         // glide: exponential approach, ~99% of the way after `glide` seconds
@@ -364,38 +510,46 @@ impl Voice {
         } else {
             self.target_pitch
         };
-        let pitch = self.pitch + bend;
+        let pitch = self.pitch + ctx.bend + md(Dest::Pitch) * modmatrix::PITCH_SEMIS;
 
         let osc_setup: [Option<(&Wavetable, f32, Unison)>; 2] = std::array::from_fn(|i| {
             let o = &p.osc[i];
-            (o.level > 0.0).then(|| {
-                let table = osc_tables[i];
-                let frame_pos = o.position.clamp(0.0, 1.0) * (table.frames() - 1) as f32;
-                let freq = midi_to_hz(pitch + (o.octave * 12 + o.semi) as f32 + o.fine / 100.0);
+            let om = &m[Dest::osc_base(i)..][..7]; // position, level, pan, pitch, detune, blend, width
+            let level = (o.level + om[1]).clamp(0.0, 1.0);
+            (level > 0.0).then(|| {
+                let table = ctx.osc_tables[i];
+                let frame_pos = (o.position + om[0]).clamp(0.0, 1.0) * (table.frames() - 1) as f32;
+                let semis = (o.octave * 12 + o.semi) as f32 + o.fine / 100.0 + om[3] * modmatrix::PITCH_SEMIS;
                 let settings = UnisonSettings {
                     voices: o.unison,
-                    detune: o.detune,
-                    blend: o.blend,
-                    width: o.width,
-                    pan: o.pan,
-                    level: o.level,
+                    detune: (o.detune + om[4]).clamp(0.0, 1.0),
+                    blend: (o.blend + om[5]).clamp(0.0, 1.0),
+                    width: (o.width + om[6]).clamp(0.0, 1.0),
+                    pan: (o.pan + om[2]).clamp(-1.0, 1.0),
+                    level,
                 };
-                (table, frame_pos, Unison::new(freq, sr, &settings))
+                (table, frame_pos, Unison::new(midi_to_hz(pitch + semis), sr, &settings))
             })
         });
 
+        let basic = ctx.basic;
+        let sub_level = (p.sub_level + md(Dest::SubLevel)).clamp(0.0, 1.0);
+        let noise_level = (p.noise_level + md(Dest::NoiseLevel)).clamp(0.0, 1.0);
         let sub_inc = (midi_to_hz(pitch + (p.sub_octave * 12) as f32) / sr).min(0.49);
         let sub_mip = mip_for(sub_inc);
         let sub_frame = p.sub_shape.min(basic.frames() - 1) as f32;
 
         let filter_on = p.filter_on;
+        let drive = (p.drive + md(Dest::Drive)).clamp(0.0, 1.0);
         let (c1, c2) = if filter_on {
-            let octaves = p.keytrack * (pitch - 60.0) / 12.0 + p.env2_amount * ENV_CUTOFF_OCTAVES * self.env[1].level();
+            let octaves = p.keytrack * (pitch - 60.0) / 12.0 + md(Dest::Cutoff) * modmatrix::CUTOFF_OCTAVES;
             let cutoff = p.cutoff * octaves.exp2();
-            (Coefs::new(cutoff, p.resonance, sr), Coefs::new(cutoff, 0.3, sr))
+            let resonance = (p.resonance + md(Dest::Resonance)).clamp(0.0, 1.0);
+            (Coefs::new(cutoff, resonance, sr), Coefs::new(cutoff, 0.3, sr))
         } else {
             (Coefs::new(1000.0, 0.0, sr), Coefs::new(1000.0, 0.0, sr))
         };
+        let volume = (1.0 + md(Dest::Volume)).max(0.0);
 
         let fade_step = 1.0 / (STEAL_FADE_S * sr);
         for j in 0..n {
@@ -412,8 +566,8 @@ impl Voice {
                     }
                 }
             }
-            if p.sub_level > 0.0 {
-                let s = basic.sample(sub_frame, sub_mip, self.sub_phase) * p.sub_level;
+            if sub_level > 0.0 {
+                let s = basic.sample(sub_frame, sub_mip, self.sub_phase) * sub_level;
                 if p.sub_to_filter {
                     fl += s;
                     fr += s;
@@ -426,8 +580,8 @@ impl Voice {
             if self.sub_phase >= 1.0 {
                 self.sub_phase -= 1.0;
             }
-            if p.noise_level > 0.0 {
-                let s = rng.bipolar() * p.noise_level;
+            if noise_level > 0.0 {
+                let s = rng.bipolar() * noise_level;
                 if p.noise_to_filter {
                     fl += s;
                     fr += s;
@@ -437,10 +591,11 @@ impl Voice {
                 }
             }
 
-            let (fl, fr) = if filter_on { self.filter.process(&c1, &c2, p.filter_mode, p.drive, fl, fr) } else { (fl, fr) };
+            let (fl, fr) = if filter_on { self.filter.process(&c1, &c2, p.filter_mode, drive, fl, fr) } else { (fl, fr) };
 
-            let amp = self.env[0].next() * self.velocity * self.fade;
+            let amp = self.env[0].next() * self.velocity * self.fade * volume;
             self.env[1].next();
+            self.env[2].next();
             if self.pending.is_some() {
                 self.fade = (self.fade - fade_step).max(0.0);
             }
@@ -499,7 +654,10 @@ mod tests {
         p.filter_mode = FilterMode::Bp24;
         p.resonance = 1.0;
         p.drive = 1.0;
-        p.env2_amount = 1.0;
+        p.mods[0].amount = 1.0; // Env 2 -> Cutoff
+        p.mods[1] = ModSlot { source: Source::Lfo1, dest: Dest::Pitch, amount: 1.0, curve: 0.5 };
+        p.mods[2] = ModSlot { source: Source::Note, dest: Dest::Resonance, amount: 1.0, curve: 0.0 };
+        p.lfo[0].rate_hz = 40.0;
         p.keytrack = 1.0;
         p.master = 4.0;
         for n in 0..=127 {
@@ -522,6 +680,60 @@ mod tests {
         run(&mut s, &p, 960); // longer than the steal fade
         assert!(s.voices.iter().any(|v| v.active && v.note == 100));
         assert!(!s.voices.iter().any(|v| v.active && v.note == 40));
+    }
+
+    #[test]
+    fn velocity_to_volume_can_silence_a_voice() {
+        let mut s = Synth::new(48000.0);
+        let mut p = Patch::default();
+        p.mods[3] = ModSlot { source: Source::Velocity, dest: Dest::Volume, amount: -1.0, curve: 0.0 };
+        s.note_on(&p, 60, 1.0);
+        let (peak, _) = run(&mut s, &p, 4800);
+        assert!(peak < 1e-6, "peak {peak}");
+    }
+
+    /// Free-running LFO synced to 1/4 at 120 BPM: a square into Volume (-100%) mutes the first
+    /// eighth note and doubles the second.
+    #[test]
+    fn synced_lfo_follows_host_tempo() {
+        let sr = 48000.0;
+        let mut s = Synth::new(sr);
+        let mut p = Patch::default();
+        p.osc[0].random_phase = 0.0;
+        p.lfo[0] = LfoPatch { shape: LfoShape::Square, sync: true, division: 8, retrigger: false, ..p.lfo[0] };
+        p.mods[3] = ModSlot { source: Source::Lfo1, dest: Dest::Volume, amount: -1.0, curve: 0.0 };
+        s.set_transport(Transport { tempo: 120.0, beats_per_bar: 4.0, pos_beats: None });
+        s.note_on(&p, 60, 1.0);
+        let (mut l, mut r) = (vec![0.0; 48000], vec![0.0; 48000]);
+        s.render(&p, &mut l, &mut r);
+        let rms = |a: f32, b: f32| {
+            let w = &l[(a * sr) as usize..(b * sr) as usize];
+            (w.iter().map(|x| x * x).sum::<f32>() / w.len() as f32).sqrt()
+        };
+        // 1/4 at 120 BPM = 0.5 s cycle: muted 0..0.25 s, loud 0.25..0.5 s, muted again 0.5..0.75 s
+        assert!(rms(0.02, 0.23) < 1e-3);
+        assert!(rms(0.27, 0.48) > 0.05);
+        assert!(rms(0.52, 0.73) < 1e-3);
+    }
+
+    #[test]
+    fn env3_to_pitch_raises_frequency() {
+        let sr = 48000.0;
+        let zero_crossings = |p: &Patch| {
+            let mut s = Synth::new(sr);
+            s.note_on(p, 57, 1.0); // 220 Hz
+            let (mut l, mut r) = (vec![0.0; 4800], vec![0.0; 4800]);
+            s.render(p, &mut l, &mut r);
+            l[480..].windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count()
+        };
+        let mut p = Patch::default();
+        p.osc[0].position = 0.0; // sine
+        p.osc[0].random_phase = 0.0;
+        p.env[2] = EnvPatch { attack: 0.0, decay: 10.0, sustain: 1.0, release: 0.1 };
+        let base = zero_crossings(&p);
+        p.mods[3] = ModSlot { source: Source::Env3, dest: Dest::Pitch, amount: 0.5, curve: 0.0 }; // +12 st
+        let up = zero_crossings(&p);
+        assert!((up as f32 / base as f32 - 2.0).abs() < 0.1, "{base} -> {up}");
     }
 
     #[test]

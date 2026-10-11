@@ -1,5 +1,5 @@
 //! Offline renderer: `cargo run --release --example render -- <preset> out.wav`
-//! Presets: init, supersaw, pluck, bass, pad. `bench` instead of a preset measures CPU.
+//! Presets: init, supersaw, pluck, bass, pad, wobble. `bench` instead of a preset measures CPU.
 //!
 //! Renders a held chord, a filter sweep, then a fast scale up to C8 (listen for aliasing up top).
 
@@ -28,7 +28,7 @@ fn preset(name: &str) -> Option<Patch> {
             p.filter_on = true;
             p.cutoff = 300.0;
             p.resonance = 0.4;
-            p.env2_amount = 0.6;
+            p.mods[0].amount = 0.6; // Env 2 -> Cutoff (pre-wired slot 1)
             p.env[1] = morphwave::voice::EnvPatch { attack: 0.001, decay: 0.25, sustain: 0.0, release: 0.2 };
             p.env[0] = morphwave::voice::EnvPatch { attack: 0.001, decay: 0.6, sustain: 0.0, release: 0.3 };
         }
@@ -56,6 +56,29 @@ fn preset(name: &str) -> Option<Patch> {
             p.osc[1].octave = 1;
             p.noise_level = 0.03;
             p.env[0] = morphwave::voice::EnvPatch { attack: 0.8, decay: 1.0, sustain: 0.8, release: 1.5 };
+        }
+        "wobble" => {
+            // LFO 1 synced to 1/8 -> cutoff and wavetable position (Phase 4 done-when)
+            use morphwave::dsp::lfo::LfoShape;
+            use morphwave::dsp::modmatrix::{Dest, ModSlot, Source};
+            p.voice_mode = VoiceMode::Mono;
+            p.osc[0].table = 2; // Formant
+            p.osc[0].position = 0.2;
+            p.osc[0].octave = -1;
+            p.osc[0].unison = 3;
+            p.osc[0].detune = 0.1;
+            p.sub_level = 0.5;
+            p.sub_octave = -2;
+            p.filter_on = true;
+            p.filter_mode = FilterMode::Lp24;
+            p.cutoff = 250.0;
+            p.resonance = 0.45;
+            p.drive = 0.3;
+            p.lfo[0].shape = LfoShape::Sine;
+            p.lfo[0].sync = true;
+            p.lfo[0].division = 5; // 1/8
+            p.mods[1] = ModSlot { source: Source::Lfo1, dest: Dest::Cutoff, amount: 0.4, curve: 0.0 };
+            p.mods[2] = ModSlot { source: Source::Lfo1, dest: Dest::APosition, amount: 0.4, curve: 0.0 };
         }
         _ => return None,
     }
@@ -107,7 +130,7 @@ fn main() {
         return bench();
     }
     let (Some(name), Some(out)) = (args.first(), args.get(1)) else {
-        eprintln!("usage: render <init|supersaw|pluck|bass|pad|bench> out.wav");
+        eprintln!("usage: render <init|supersaw|pluck|bass|pad|wobble|bench> out.wav");
         std::process::exit(2);
     };
     let Some(mut patch) = preset(name) else {
