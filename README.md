@@ -31,6 +31,10 @@ The plugin may be sold closed-source later, so every dependency that ships in th
 
 These will be checked when they are added in later phases: egui and nih_plug_egui (MIT / Apache-2.0 expected), baseview (MIT / Apache-2.0 expected), `realfft` / `rustfft` (MIT / Apache-2.0 expected), `hound` (Apache-2.0 expected), and `rfd` (MIT expected).
 
+## Known issues
+
+- **nih-plug state bugs.** clap-validator's `state-reproducibility-*` and `state-invalid-random` tests fail in nih-plug itself ([#275](https://github.com/robbert-vdh/nih-plug/issues/275), [#279](https://github.com/robbert-vdh/nih-plug/issues/279)). After a host loads state, the host isn't told that parameter values changed, and a corrupt state blob can abort the plugin instead of being rejected. CI skips these tests for now. Fix or patch them before Phase 3, which stores wavetables in the plugin state.
+
 ## Development
 
 ```
